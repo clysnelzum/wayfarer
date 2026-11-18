@@ -42,7 +42,7 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 				}
 				defer ws.Close()
 				_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
-				for _, method := range []string{"Target.createTarget", "Target.attachToTarget", "Page.navigate", "Runtime.evaluate", "Target.closeTarget"} {
+				for _, method := range []string{"Target.createTarget", "Target.attachToTarget", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride", "Page.navigate", "Runtime.evaluate", "Target.closeTarget"} {
 					var request struct {
 						ID     int
 						Method string
@@ -61,6 +61,8 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 						result = map[string]string{"targetId": "target"}
 					case "Target.attachToTarget":
 						result = map[string]string{"sessionId": "session"}
+					case "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride":
+						result = struct{}{}
 					case "Page.navigate":
 						u, err := url.Parse(request.Params.URL)
 						if err != nil || u.Host != "www.linkedin.com" || u.Path != "/jobs/search-results/" || u.RawQuery != "f_EA=true&keywords=DevOps&start=25" {

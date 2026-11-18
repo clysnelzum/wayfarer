@@ -54,14 +54,14 @@
       "404": {"$ref": "#/components/responses/NotFound"},
       "default": {"$ref": "#/components/responses/Error"}
     }}},
-    "/v1/profiles/{slug}": {"get": {"operationId": "getProfile", "summary": "Read a personal profile's professional summary", "parameters": [
+    "/v1/profiles/{slug}": {"get": {"operationId": "getProfile", "summary": "Read a personal profile", "description": "Returns the rendered personal profile top card, summary, featured items, recent activity, experience, education, certifications, skills, languages, projects, volunteering, publications, honors, recommendations, and interests when visible.", "parameters": [
       {"$ref": "#/components/parameters/Slug"}
     ], "responses": {
       "200": {"description": "Personal profile", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Profile"}}}},
       "404": {"$ref": "#/components/responses/NotFound"},
       "default": {"$ref": "#/components/responses/Error"}
     }}},
-    "/v1/companies/{slug}": {"get": {"operationId": "getCompany", "summary": "Read a company profile's About page", "parameters": [
+    "/v1/companies/{slug}": {"get": {"operationId": "getCompany", "summary": "Read a company profile's About page", "description": "Returns the company top card, About overview details, workplace policy, commitments, locations, affiliated pages, and similar pages when visible.", "parameters": [
       {"$ref": "#/components/parameters/Slug"}
     ], "responses": {
       "200": {"description": "Company profile", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Company"}}}},
@@ -71,7 +71,7 @@
   },
   "components": {
     "securitySchemes": {"localToken": {"type": "http", "scheme": "bearer"}},
-    "parameters": {"Slug": {"name": "slug", "in": "path", "required": true, "description": "LinkedIn profile URL slug, not a display name or a full URL.", "schema": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,99}$"}}},
+    "parameters": {"Slug": {"name": "slug", "in": "path", "required": true, "description": "LinkedIn personal or company profile URL slug, not a display name or a full URL.", "schema": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,99}$"}}},
     "responses": {
       "NotFound": {"description": "LinkedIn explicitly indicated the resource is unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
       "Error": {"description": "Invalid input, invalid token, unsupported method, or an upstream failure", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
@@ -163,12 +163,127 @@
       }},
       "Profile": {"type": "object", "required": ["slug", "url", "name"], "properties": {
         "slug": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "name": {"type": "string"},
-        "headline": {"type": "string"}, "location": {"type": "string"}, "about": {"type": "string"}
+        "pronouns": {"type": "string"},
+        "verified": {"const": true, "description": "Present and true when LinkedIn displays a verification badge on the profile top card."},
+        "premium": {"const": true, "description": "Present and true when LinkedIn displays a Premium badge on the profile top card."},
+        "top_voice": {"const": true, "description": "Present and true when LinkedIn displays a Top Voice badge on the profile top card."},
+        "connection_degree": {"type": "string", "description": "Connection degree label as shown (for example 1st, 2nd, 3rd+)."},
+        "headline": {"type": "string"}, "location": {"type": "string"},
+        "profile_image_url": {"type": "string", "format": "uri"},
+        "background_image_url": {"type": "string", "format": "uri"},
+        "followers_label": {"type": "string", "description": "Localized follower count label as displayed."},
+        "followers_count": {"type": "integer", "minimum": 0, "description": "Exact follower count when displayed without abbreviation."},
+        "connections_label": {"type": "string", "description": "Localized connection count label as displayed."},
+        "current_company_label": {"type": "string"},
+        "education_label": {"type": "string"},
+        "website": {"type": "string", "format": "uri"},
+        "open_to_work": {"const": true, "description": "Present and true when an Open to Work marker is visible on the top card."},
+        "hiring": {"const": true, "description": "Present and true when a Hiring marker is visible on the top card."},
+        "about": {"type": "string"},
+        "top_skills": {"type": "array", "maxItems": 20, "items": {"type": "string"}},
+        "featured": {"type": "array", "maxItems": 15, "items": {"$ref": "#/components/schemas/ProfileFeaturedItem"}},
+        "activity": {"type": "array", "maxItems": 10, "items": {"$ref": "#/components/schemas/ProfileActivityItem"}},
+        "experience": {"type": "array", "maxItems": 50, "items": {"$ref": "#/components/schemas/ProfileExperience"}},
+        "education": {"type": "array", "maxItems": 30, "items": {"$ref": "#/components/schemas/ProfileEducation"}},
+        "certifications": {"type": "array", "maxItems": 50, "items": {"$ref": "#/components/schemas/ProfileCertification"}},
+        "skills": {"type": "array", "maxItems": 50, "items": {"$ref": "#/components/schemas/ProfileSkill"}},
+        "languages": {"type": "array", "maxItems": 30, "items": {"$ref": "#/components/schemas/ProfileLanguage"}},
+        "projects": {"type": "array", "maxItems": 30, "items": {"$ref": "#/components/schemas/ProfileProject"}},
+        "volunteering": {"type": "array", "maxItems": 30, "items": {"$ref": "#/components/schemas/ProfileVolunteering"}},
+        "publications": {"type": "array", "maxItems": 30, "items": {"$ref": "#/components/schemas/ProfilePublication"}},
+        "honors": {"type": "array", "maxItems": 30, "items": {"$ref": "#/components/schemas/ProfileHonor"}},
+        "recommendations": {"type": "array", "maxItems": 20, "items": {"$ref": "#/components/schemas/ProfileRecommendation"}},
+        "interests": {"type": "array", "maxItems": 20, "items": {"$ref": "#/components/schemas/ProfileInterest"}}
+      }},
+      "ProfileFeaturedItem": {"type": "object", "properties": {
+        "title": {"type": "string"}, "type": {"type": "string"}, "url": {"type": "string", "format": "uri"}
+      }},
+      "ProfileActivityItem": {"type": "object", "properties": {
+        "url": {"type": "string", "format": "uri"}, "published_label": {"type": "string"}, "text": {"type": "string"},
+        "author_name": {"type": "string"}, "author_slug": {"type": "string"}
+      }},
+      "ProfileExperience": {"type": "object", "required": ["title"], "properties": {
+        "title": {"type": "string"}, "company": {"type": "string"}, "company_url": {"type": "string", "format": "uri"},
+        "company_slug": {"type": "string"}, "employment_type": {"type": "string"}, "date_range": {"type": "string"},
+        "duration": {"type": "string"}, "location": {"type": "string"}, "description": {"type": "string"},
+        "current": {"const": true}
+      }},
+      "ProfileEducation": {"type": "object", "required": ["school"], "properties": {
+        "school": {"type": "string"}, "school_url": {"type": "string", "format": "uri"}, "school_slug": {"type": "string"},
+        "degree": {"type": "string"}, "date_range": {"type": "string"}, "description": {"type": "string"}
+      }},
+      "ProfileCertification": {"type": "object", "required": ["name"], "properties": {
+        "name": {"type": "string"}, "issuer": {"type": "string"}, "issue_date": {"type": "string"},
+        "credential_id": {"type": "string"}, "credential_url": {"type": "string", "format": "uri"}
+      }},
+      "ProfileSkill": {"type": "object", "required": ["name"], "properties": {
+        "name": {"type": "string"}, "endorsements_label": {"type": "string"}
+      }},
+      "ProfileLanguage": {"type": "object", "required": ["name"], "properties": {
+        "name": {"type": "string"}, "proficiency": {"type": "string"}
+      }},
+      "ProfileProject": {"type": "object", "required": ["title"], "properties": {
+        "title": {"type": "string"}, "date_range": {"type": "string"}, "description": {"type": "string"},
+        "url": {"type": "string", "format": "uri"}
+      }},
+      "ProfileVolunteering": {"type": "object", "required": ["role"], "properties": {
+        "role": {"type": "string"}, "organization": {"type": "string"}, "date_range": {"type": "string"},
+        "cause": {"type": "string"}, "description": {"type": "string"}
+      }},
+      "ProfilePublication": {"type": "object", "required": ["title"], "properties": {
+        "title": {"type": "string"}, "publisher": {"type": "string"}, "date": {"type": "string"},
+        "description": {"type": "string"}, "url": {"type": "string", "format": "uri"}
+      }},
+      "ProfileHonor": {"type": "object", "required": ["title"], "properties": {
+        "title": {"type": "string"}, "issuer": {"type": "string"}, "date": {"type": "string"}, "description": {"type": "string"}
+      }},
+      "ProfileRecommendation": {"type": "object", "required": ["author_name", "author_slug", "author_url"], "properties": {
+        "author_name": {"type": "string"}, "author_slug": {"type": "string"}, "author_url": {"type": "string", "format": "uri"},
+        "author_headline": {"type": "string"}, "relationship": {"type": "string"}, "text": {"type": "string"}
+      }},
+      "ProfileInterest": {"type": "object", "required": ["name", "kind", "slug", "url"], "properties": {
+        "name": {"type": "string"},
+        "kind": {"type": "string", "enum": ["person", "company", "school", "group", "newsletter"]},
+        "slug": {"type": "string"}, "url": {"type": "string", "format": "uri"},
+        "headline": {"type": "string"}, "followers_label": {"type": "string"}
       }},
       "Company": {"type": "object", "required": ["slug", "url", "name"], "properties": {
         "slug": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "name": {"type": "string"},
-        "description": {"type": "string"}, "website": {"type": "string", "format": "uri"}, "industry": {"type": "string"}, "company_size": {"type": "string"},
-        "headquarters": {"type": "string"}, "founded": {"type": "string"}, "company_type": {"type": "string"}, "specialties": {"type": "string"}
+        "id": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$", "description": "Numeric LinkedIn organization ID when exposed by the page."},
+        "tagline": {"type": "string"}, "description": {"type": "string"},
+        "website": {"type": "string", "format": "uri"}, "phone": {"type": "string"}, "industry": {"type": "string"}, "company_size": {"type": "string"},
+        "associated_members_count": {"type": "integer", "minimum": 0, "description": "Exact associated members count when displayed without abbreviation."},
+        "associated_members_label": {"type": "string", "description": "Localized associated members label as displayed in Overview."},
+        "followers_count": {"type": "integer", "minimum": 0, "description": "Exact follower count when available from LinkedIn."},
+        "followers_label": {"type": "string", "description": "Localized follower count label as displayed in the top card."},
+        "employees_label": {"type": "string", "description": "Localized employee count label as displayed in the top card."},
+        "headquarters": {"type": "string"}, "founded": {"type": "string"}, "company_type": {"type": "string"}, "specialties": {"type": "string"},
+        "verified": {"const": true, "description": "Present and true when LinkedIn displays a verified badge or verified page entry."},
+        "verified_page": {"type": "string", "description": "Verification metadata shown in the Overview details."},
+        "premium": {"const": true, "description": "Present and true when LinkedIn displays a Premium badge on the company page."},
+        "logo_url": {"type": "string", "format": "uri"}, "cover_image_url": {"type": "string", "format": "uri"},
+        "highlights": {"type": "array", "maxItems": 10, "items": {"type": "string"}},
+        "workplace_policy": {"$ref": "#/components/schemas/CompanyWorkplacePolicy"},
+        "commitments": {"type": "array", "maxItems": 10, "items": {"$ref": "#/components/schemas/CompanyCommitment"}},
+        "locations_count": {"type": "integer", "minimum": 0},
+        "locations": {"type": "array", "maxItems": 50, "items": {"$ref": "#/components/schemas/CompanyLocation"}},
+        "affiliated_pages": {"type": "array", "maxItems": 15, "items": {"$ref": "#/components/schemas/CompanyRelatedPage"}},
+        "similar_pages": {"type": "array", "maxItems": 15, "items": {"$ref": "#/components/schemas/CompanyRelatedPage"}}
+      }},
+      "CompanyWorkplacePolicy": {"type": "object", "required": ["title"], "properties": {
+        "title": {"type": "string"}, "description": {"type": "string"}, "default_presence": {"type": "string"},
+        "benefits": {"type": "array", "maxItems": 20, "items": {"type": "string"}}
+      }},
+      "CompanyCommitment": {"type": "object", "required": ["title"], "properties": {
+        "title": {"type": "string"}, "description": {"type": "string"}
+      }},
+      "CompanyLocation": {"type": "object", "properties": {
+        "label": {"type": "string"}, "address": {"type": "string"}, "is_headquarters": {"const": true},
+        "map_url": {"type": "string", "format": "uri"}
+      }},
+      "CompanyRelatedPage": {"type": "object", "required": ["slug", "url", "name"], "properties": {
+        "slug": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "name": {"type": "string"},
+        "industry": {"type": "string"}, "followers_label": {"type": "string"}
       }},
       "Error": {"type": "object", "required": ["error"], "properties": {
         "error": {"type": "object", "required": ["code", "message"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}}

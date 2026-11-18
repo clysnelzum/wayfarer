@@ -142,7 +142,7 @@ func (b *Browser) acquire(ctx context.Context) (*cdp, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: 12 * time.Second}
+	dialer := websocket.Dialer{HandshakeTimeout: 25 * time.Second}
 	ws, resp, err := dialer.DialContext(ctx, b.endpoint, nil)
 	if err != nil {
 		if resp != nil && resp.Body != nil {
@@ -184,7 +184,7 @@ func (b *Browser) Read(ctx context.Context, pageURL, expression string) (json.Ra
 	default:
 		return nil, ErrBusy
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	c, err := b.acquire(ctx)
 	if err != nil {
@@ -215,6 +215,17 @@ func (b *Browser) Read(ctx context.Context, pageURL, expression string) (json.Ra
 	if attached.SessionID == "" {
 		return nil, errors.New("Chrome returned no session ID")
 	}
+	if err := c.call(ctx, attached.SessionID, "Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true}, nil); err != nil {
+		return nil, err
+	}
+	if err := c.call(ctx, attached.SessionID, "Emulation.setDeviceMetricsOverride", map[string]any{
+		"width":             1280,
+		"height":            900,
+		"deviceScaleFactor": 1,
+		"mobile":            false,
+	}, nil); err != nil {
+		return nil, err
+	}
 	var nav struct{ ErrorText string }
 	if err := c.call(ctx, attached.SessionID, "Page.navigate", map[string]string{"url": pageURL}, &nav); err != nil {
 		return nil, err
@@ -225,7 +236,7 @@ func (b *Browser) Read(ctx context.Context, pageURL, expression string) (json.Ra
 
 	// Check origin before invoking the extractor, including after redirects.
 	js := `(async () => {
-		if (location.href === 'about:blank' || document.readyState === 'loading') return null;
+		if (location.href === 'about:blank' || (document.readyState === 'loading' && !document.querySelector('main, [role="main"], form[action*="login-submit"]'))) return null;
 		if (location.origin !== 'https://www.linkedin.com' || /^\/(login|uas|checkpoint|authwall)(\/|$)/.test(location.pathname)) return {state:'auth'};
 		if (document.querySelector('form[action*="login-submit"]')) return {state:'auth'};
 		const value = await (` + expression + `)();

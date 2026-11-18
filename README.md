@@ -39,8 +39,8 @@ Invoke-RestMethod 'http://127.0.0.1:8765/v1/jobs?q=DevOps' `
 | `GET /v1/jobs/companies?q=Microsoft` | LinkedIn job-search company autocomplete. Returns organization IDs, names, and industry labels when present. Use the IDs as `company_id` or `company_ids`. |
 | `GET /v1/jobs/{id}` | Posting description, company slug, location, workplace and employment type, application method and state, displayed activity counts, and related jobs where available. |
 | `GET /v1/feed` | Personalized feed in the sort order active in Chrome. Omit `limit` for the initial batch, or pass `?limit=1` through `?limit=30` to scan further. |
-| `GET /v1/profiles/{slug}` | Personal profile: `slug`, `url`, and `name`, plus `headline`, `location`, and `about` when present. |
-| `GET /v1/companies/{slug}` | Company profile: `slug`, `url`, and `name`, plus `description`, `website`, `industry`, `company_size`, `headquarters`, `founded`, `company_type`, and `specialties` when present. |
+| `GET /v1/profiles/{slug}` | Personal profile: `slug`, `url`, and `name`, plus top-card details (badges, counts, `open_to_work`, `hiring`), `about`, `top_skills`, `featured`, `activity`, `experience`, `education`, `certifications`, `skills`, `languages`, `projects`, `volunteering`, `publications`, `honors`, `recommendations`, and `interests` when visible. |
+| `GET /v1/companies/{slug}` | Company profile: `slug`, `url`, and `name`, plus `id`, top-card badges/counts, overview details, `highlights`, `workplace_policy`, `commitments`, `locations`, `affiliated_pages`, and `similar_pages` when visible. |
 
 For service integrations, use the [OpenAPI contract](docs/openapi.json). A `slug` is the segment after `/in/` or `/company/` in a LinkedIn URL, not a display name or a full URL. Optional profile fields are omitted when unavailable. The service is loopback-only; remote consumers should use an authenticated HTTPS gateway rather than exposing Chrome's debugger or sharing its endpoint.
 
@@ -75,7 +75,7 @@ Responses are JSON and are not cached. Errors use `{"error":{"code":"…","messa
 
 ## Scope
 
-This is not a complete LinkedIn API. Personal profiles are limited to their professional summary; experience and education are not mapped yet. Company profiles use the About page only. There are no messaging or contact-info endpoints. Job search supports pagination. The feed supports bounded in-page loading but not continuation across HTTP requests, fully expanded comment threads, or write actions. Job recommendations are still limited to initially rendered items. Extraction currently targets the observed Spanish and English interface. The `/v1` contract is independent of LinkedIn's markup, but upstream layout changes may require adapter updates. The API uses a temporary background tab per request and closes it before reusing its debugger connection; it does not reuse or navigate the user's open tabs. An interrupted process may leave a temporary tab behind.
+This is not a complete LinkedIn API. Personal profiles map the rendered profile page, including scroll-triggered lazy sections (`experience`, `education`, `certifications`, `skills`, `languages`, `projects`, `volunteering`, `publications`, `honors`, `recommendations`, `activity`, `featured`, and `interests`). Company profiles use the About page and sidebar cards (`top card`, `overview` details, associated members, `workplace_policy`, `commitments`, `locations`, `affiliated_pages`/showcase pages, and `similar_pages`). There are no messaging or contact-info endpoints. Job search supports pagination. The feed supports bounded in-page loading but not continuation across HTTP requests, fully expanded comment threads, or write actions. Job recommendations are still limited to initially rendered items. Extraction currently targets the observed Spanish and English interface. The `/v1` contract is independent of LinkedIn's markup, but upstream layout changes may require adapter updates. The API uses a temporary background tab per request and closes it before reusing its debugger connection; it does not reuse or navigate the user's open tabs. An interrupted process may leave a temporary tab behind.
 
 - `cmd/wayfarer/`: server setup
 - `internal/api/`: versioned routes and response handling
@@ -83,4 +83,4 @@ This is not a complete LinkedIn API. Personal profiles are limited to their prof
 - `internal/linkedin/`: LinkedIn page adapters and typed response models
 - [`docs/upstream.md`](docs/upstream.md): observed upstream data sources and remaining research
 
-Run unit tests with `go test ./...` when Go is available. Run the dependency-free job extractor fixtures with `node --test tests/jobs-extractors.test.cjs tests/job-company-records.test.cjs`.
+Run unit tests with `go test ./...` when Go is available. Run the dependency-free extractor fixtures with `node --test tests/jobs-extractors.test.cjs tests/job-company-records.test.cjs tests/company-extractor.test.cjs tests/profile-extractor.test.cjs` (or `node --test tests/*.test.cjs`).

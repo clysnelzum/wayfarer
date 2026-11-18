@@ -39,6 +39,7 @@ func TestReadReusesDebuggerAndReconnectsBeforeNavigation(t *testing.T) {
 				result = map[string]string{"targetId": "temporary"}
 			case "Target.attachToTarget":
 				result = map[string]string{"sessionId": "session"}
+			case "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride":
 			case "Page.navigate":
 				navigations.Add(1)
 			case "Runtime.evaluate":
@@ -116,6 +117,16 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 							t.Errorf("unexpected attach params: %v", m.Params)
 						}
 						payload = map[string]string{"sessionId": "test-session"}
+					case "Emulation.setFocusEmulationEnabled":
+						if m.SessionID != "test-session" || m.Params["enabled"] != true {
+							t.Errorf("unexpected focus emulation: %+v", m)
+						}
+						payload = struct{}{}
+					case "Emulation.setDeviceMetricsOverride":
+						if m.SessionID != "test-session" || m.Params["width"] != float64(1280) || m.Params["height"] != float64(900) || m.Params["deviceScaleFactor"] != float64(1) || m.Params["mobile"] != false {
+							t.Errorf("unexpected device metrics override: %+v", m)
+						}
+						payload = struct{}{}
 					case "Page.navigate":
 						if m.SessionID != "test-session" || m.Params["url"] != "https://www.linkedin.com/jobs/" {
 							t.Errorf("unexpected navigation: %+v", m)
@@ -162,7 +173,16 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 					t.Fatalf("unexpected result: %s (%v)", got, err)
 				}
 			}
-			want := []string{"Target.createTarget", "Target.attachToTarget", "Page.navigate", "Runtime.evaluate", "Runtime.evaluate", "Target.closeTarget"}
+			want := []string{
+				"Target.createTarget",
+				"Target.attachToTarget",
+				"Emulation.setFocusEmulationEnabled",
+				"Emulation.setDeviceMetricsOverride",
+				"Page.navigate",
+				"Runtime.evaluate",
+				"Runtime.evaluate",
+				"Target.closeTarget",
+			}
 			select {
 			case got := <-observed:
 				if !reflect.DeepEqual(got, want) {
