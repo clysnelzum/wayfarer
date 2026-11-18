@@ -1,0 +1,178 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Wayfarer API", "version": "1.0.0", "description": "Read-only views of an authenticated LinkedIn browsing session. No messaging endpoints."},
+  "servers": [{"url": "http://127.0.0.1:8765"}],
+  "security": [{"localToken": []}],
+  "paths": {
+    "/healthz": {"get": {"operationId": "getHealth", "summary": "Check local process health", "responses": {
+      "200": {"description": "The HTTP server is up; this does not check Chrome", "content": {"application/json": {"schema": {"type": "object", "required": ["status"], "properties": {"status": {"const": "ok"}}}}}},
+      "default": {"$ref": "#/components/responses/Error"}
+    }}},
+    "/v1/feed": {"get": {"operationId": "getFeed", "summary": "Read the personalized feed", "parameters": [
+      {"name": "limit", "in": "query", "description": "Request up to this many cards using bounded in-page pagination. Omit for the initially rendered batch without scrolling.", "schema": {"type": "integer", "minimum": 1, "maximum": 30}}
+    ], "responses": {
+      "200": {"description": "Feed cards", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Feed"}}}},
+      "default": {"$ref": "#/components/responses/Error"}
+    }}},
+    "/v1/jobs": {"get": {"operationId": "listJobs", "summary": "Read recommendations or search jobs", "parameters": [
+      {"name": "q", "in": "query", "description": "Keyword search; omit for recommendations. The UTF-8 string must not exceed 240 bytes.", "schema": {"type": "string", "minLength": 1, "maxLength": 240}},
+      {"name": "page", "in": "query", "description": "One-based search page. Requires q. Defaults to 1 for search.", "schema": {"type": "integer", "minimum": 1, "maximum": 100}},
+      {"name": "geo_id", "in": "query", "description": "LinkedIn geography ID from job location autocomplete. Requires q.", "schema": {"type": "string", "pattern": "^[1-9][0-9]{0,11}$"}},
+      {"name": "company_id", "in": "query", "description": "Numeric LinkedIn organization ID, not a company slug. Requires q and cannot be combined with company_ids.", "schema": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"}},
+      {"name": "company_ids", "in": "query", "description": "Comma-separated LinkedIn organization IDs. Requires q and cannot be combined with company_id.", "style": "form", "explode": false, "schema": {"type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"}}},
+      {"name": "posted_within", "in": "query", "description": "Posting age filter. Requires q.", "schema": {"type": "string", "enum": ["day", "week", "month"]}},
+      {"name": "workplace", "in": "query", "description": "Comma-separated workplace options. Requires q.", "style": "form", "explode": false, "schema": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"$ref": "#/components/schemas/Workplace"}}},
+      {"name": "experience", "in": "query", "description": "Comma-separated experience levels. Requires q.", "style": "form", "explode": false, "schema": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "enum": ["entry", "senior", "manager", "director", "executive"]}}},
+      {"name": "employment_type", "in": "query", "description": "Comma-separated employment types. Requires q.", "style": "form", "explode": false, "schema": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "enum": ["full_time", "part_time", "contract", "internship", "volunteer"]}}},
+      {"name": "easy_apply", "in": "query", "description": "Enable the LinkedIn Easy Apply filter. Requires q.", "schema": {"type": "boolean"}},
+      {"name": "in_network", "in": "query", "description": "Enable the In My Network filter. Requires q.", "schema": {"type": "boolean"}},
+      {"name": "verified", "in": "query", "description": "Enable the Verified job filter. Requires q.", "schema": {"type": "boolean"}},
+      {"name": "suggested_facet_ids", "in": "query", "description": "Comma-separated IDs from search.suggested_facets. Requires q. Reuse with the search that returned them; available suggestions may change.", "style": "form", "explode": false, "schema": {"type": "array", "minItems": 1, "maxItems": 12, "uniqueItems": true, "items": {"type": "string", "pattern": "^(228001|230001):[1-9][0-9]{0,11}$"}}},
+      {"name": "under_10_applicants", "in": "query", "description": "Enable the LinkedIn Under 10 Applicants filter. Requires q; does not independently certify each posting's applicant count.", "schema": {"type": "boolean"}}
+    ], "responses": {
+      "200": {"description": "Job cards, with pagination and search evidence or recommendation sections when available", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/JobResults"}}}},
+      "502": {"description": "Upstream read failed or LinkedIn dropped or changed a requested search control (upstream_search_changed)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+      "503": {"description": "Chrome debugger unavailable (upstream_debugger_unavailable), capacity exhausted (upstream_busy), or LinkedIn authentication required (upstream_auth_required)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+      "default": {"$ref": "#/components/responses/Error"}
+    }}},
+    "/v1/jobs/locations": {"get": {"operationId": "suggestJobLocations", "summary": "Look up LinkedIn geography IDs", "parameters": [
+      {"name": "q", "in": "query", "required": true, "description": "Location name; at least two characters and at most 120 UTF-8 bytes.", "schema": {"type": "string", "minLength": 2, "maxLength": 120}}
+    ], "responses": {
+      "200": {"description": "Job-search location suggestions", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/JobLocations"}}}},
+      "default": {"$ref": "#/components/responses/Error"}
+    }}},
+    "/v1/jobs/companies": {"get": {"operationId": "suggestJobCompanies", "summary": "Look up organization IDs for the job search company filter", "parameters": [
+      {"name": "q", "in": "query", "required": true, "description": "Company name or prefix; at least two characters and at most 120 UTF-8 bytes.", "schema": {"type": "string", "minLength": 2, "maxLength": 120}}
+    ], "responses": {
+      "200": {"description": "Suggestions in LinkedIn picker order; pass their IDs to company_id or company_ids", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/JobCompanies"}}}},
+      "default": {"$ref": "#/components/responses/Error"}
+    }}},
+    "/v1/jobs/{id}": {"get": {"operationId": "getJob", "summary": "Read one job posting", "parameters": [
+      {"name": "id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"}}
+    ], "responses": {
+      "200": {"description": "Job detail", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Job"}}}},
+      "404": {"$ref": "#/components/responses/NotFound"},
+      "default": {"$ref": "#/components/responses/Error"}
+    }}},
+    "/v1/profiles/{slug}": {"get": {"operationId": "getProfile", "summary": "Read a personal profile's professional summary", "parameters": [
+      {"$ref": "#/components/parameters/Slug"}
+    ], "responses": {
+      "200": {"description": "Personal profile", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Profile"}}}},
+      "404": {"$ref": "#/components/responses/NotFound"},
+      "default": {"$ref": "#/components/responses/Error"}
+    }}},
+    "/v1/companies/{slug}": {"get": {"operationId": "getCompany", "summary": "Read a company profile's About page", "parameters": [
+      {"$ref": "#/components/parameters/Slug"}
+    ], "responses": {
+      "200": {"description": "Company profile", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Company"}}}},
+      "404": {"$ref": "#/components/responses/NotFound"},
+      "default": {"$ref": "#/components/responses/Error"}
+    }}}
+  },
+  "components": {
+    "securitySchemes": {"localToken": {"type": "http", "scheme": "bearer"}},
+    "parameters": {"Slug": {"name": "slug", "in": "path", "required": true, "description": "LinkedIn profile URL slug, not a display name or a full URL.", "schema": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,99}$"}}},
+    "responses": {
+      "NotFound": {"description": "LinkedIn explicitly indicated the resource is unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+      "Error": {"description": "Invalid input, invalid token, unsupported method, or an upstream failure", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+    },
+    "schemas": {
+      "Feed": {"type": "object", "required": ["items", "load_status"], "properties": {
+        "items": {"type": "array", "maxItems": 30, "items": {"$ref": "#/components/schemas/FeedPost"}},
+        "sort": {"type": "string", "enum": ["recent", "top"], "description": "The account's observed sort mode; not changed by this call."},
+        "has_more": {"const": true, "description": "Present only if additional cards or an enabled load-more control were observed; omission does not mean the feed is exhausted."},
+        "load_status": {"type": "string", "enum": ["initial", "limit_reached", "budget_reached", "no_more_observed", "no_progress"]}
+      }},
+      "FeedPost": {"type": "object", "required": ["id", "text", "content"], "properties": {
+        "id": {"type": "string", "description": "Opaque card key, not an activity URN or permalink."},
+        "text": {"type": "string", "description": "Rendered card text, including UI labels."},
+        "content": {"type": "string", "description": "Post body when available, otherwise an empty string."},
+        "url": {"type": "string", "format": "uri"},
+        "author": {"type": "object", "required": ["kind", "slug", "name", "url"], "properties": {
+          "kind": {"type": "string", "enum": ["person", "company"]}, "slug": {"type": "string"}, "name": {"type": "string"}, "url": {"type": "string", "format": "uri"}
+        }},
+        "published_label": {"type": "string", "description": "Relative text as shown, not an absolute timestamp."},
+        "hashtags": {"type": "array", "items": {"type": "string"}},
+        "media": {"type": "array", "items": {"type": "object", "required": ["type"], "properties": {
+          "type": {"type": "string", "enum": ["image", "video"]}, "url": {"type": "string", "format": "uri"}, "alt": {"type": "string"}
+        }}},
+        "engagement": {"type": "object", "properties": {
+          "reaction_count": {"type": "integer", "minimum": 0}, "comment_count": {"type": "integer", "minimum": 0}, "repost_count": {"type": "integer", "minimum": 0}
+        }},
+        "sponsored": {"const": true, "description": "Present when a sponsored label was detected."}
+      }},
+      "JobResults": {"type": "object", "required": ["items"], "properties": {
+        "items": {"type": "array", "maxItems": 25, "items": {"$ref": "#/components/schemas/JobSummary"}},
+        "sections": {"type": "array", "maxItems": 12, "description": "Visible groups on the recommendations page. IDs reference items in this response; the same ID may occur in several groups.", "items": {"type": "object", "required": ["title", "job_ids"], "properties": {
+          "title": {"type": "string"}, "job_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+        }}},
+        "pagination": {"type": "object", "required": ["page", "has_more"], "properties": {
+          "page": {"type": "integer", "minimum": 1, "maximum": 100}, "has_more": {"type": "boolean"}, "next_page": {"type": "integer", "minimum": 2, "maximum": 100},
+          "out_of_range": {"const": true, "description": "An explicitly empty page whose offset meets or exceeds LinkedIn's positive, unqualified result total. Omitted when this cannot be established."}
+        }},
+        "search": {"type": "object", "required": ["match_mode"], "properties": {
+          "match_mode": {"type": "string", "enum": ["results", "broadened", "no_results"], "description": "Broadened means LinkedIn explicitly showed alternatives to exact matches. Results does not guarantee strict filtering."},
+          "result_count": {"type": "integer", "minimum": 0}, "result_count_qualifier": {"$ref": "#/components/schemas/CountQualifier"},
+          "location_label": {"type": "string"},
+          "result_count_label": {"type": "string", "description": "Localized result total as displayed by LinkedIn."},
+          "notice": {"type": "string", "description": "Upstream broadened-search or empty-result message when displayed."},
+          "selected_job_id": {"type": "string", "description": "ID selected in LinkedIn's results pane when navigation exposes it."},
+          "suggested_facets": {"type": "array", "maxItems": 12, "description": "Recognized dynamic suggestions in toolbar order. Omitted when unavailable.", "items": {"type": "object", "required": ["id", "label", "selected"], "properties": {
+            "id": {"type": "string", "pattern": "^(228001|230001):[1-9][0-9]{0,11}$", "description": "Reuse this identifier as returned; do not derive it from a label."},
+            "label": {"type": "string", "description": "Localized suggestion label."},
+            "selected": {"type": "boolean", "description": "Whether LinkedIn's suggestion control is checked."}
+          }}}
+        }}
+      }},
+      "Workplace": {"type": "string", "enum": ["remote", "hybrid", "onsite"]},
+      "CountQualifier": {"type": "string", "enum": ["exact", "more_than", "at_least"]},
+      "JobLocations": {"type": "object", "required": ["items", "status"], "properties": {
+        "status": {"type": "string", "enum": ["suggestions", "no_suggestions_observed"]},
+        "items": {"type": "array", "maxItems": 15, "items": {"type": "object", "required": ["id", "name"], "properties": {
+          "id": {"type": "string"}, "name": {"type": "string"}
+        }}}
+      }},
+      "JobCompanies": {"type": "object", "required": ["items", "status"], "properties": {
+        "status": {"type": "string", "enum": ["suggestions", "no_suggestions_observed"]},
+        "items": {"type": "array", "maxItems": 15, "items": {"type": "object", "required": ["id", "name"], "properties": {
+          "id": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"}, "name": {"type": "string"}, "industry": {"type": "string"}
+        }}}
+      }},
+      "JobSummary": {"type": "object", "required": ["id", "title", "company", "location", "url"], "properties": {
+        "id": {"type": "string"}, "title": {"type": "string"}, "company": {"type": "string"}, "location": {"type": "string"}, "url": {"type": "string", "format": "uri"},
+        "workplace": {"$ref": "#/components/schemas/Workplace"}, "posted_label": {"type": "string"},
+        "verified": {"const": true}, "promoted": {"const": true}, "viewed": {"const": true}, "saved": {"const": true}, "easy_apply": {"const": true},
+        "signals": {"type": "array", "uniqueItems": true, "items": {"type": "string", "enum": ["early_applicant", "actively_reviewing"]}}
+      }},
+      "Job": {"type": "object", "required": ["id", "title", "company", "url", "description"], "properties": {
+        "id": {"type": "string"}, "title": {"type": "string"}, "company": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "description": {"type": "string"},
+        "company_slug": {"type": "string"}, "location": {"type": "string"}, "posted_label": {"type": "string"},
+        "workplace": {"$ref": "#/components/schemas/Workplace"},
+        "employment_type": {"type": "string", "enum": ["full_time", "part_time", "contract", "internship", "volunteer", "temporary"]},
+        "apply_method": {"type": "string", "enum": ["external", "easy_apply"]},
+        "application_status": {"type": "string", "enum": ["open", "closed"]},
+        "application_activity": {"type": "object", "required": ["kind", "count", "qualifier"], "properties": {
+          "kind": {"type": "string", "enum": ["apply_clicks", "applications"]}, "count": {"type": "integer", "minimum": 0},
+          "qualifier": {"$ref": "#/components/schemas/CountQualifier"}
+        }},
+        "viewer_application": {"type": "object", "required": ["status"], "properties": {
+          "status": {"const": "submitted"}, "submitted_label": {"type": "string"}
+        }},
+        "verified": {"const": true}, "promoted": {"const": true}, "saved": {"type": "boolean"},
+        "related_jobs": {"type": "array", "maxItems": 12, "items": {"$ref": "#/components/schemas/JobSummary"}}
+      }},
+      "Profile": {"type": "object", "required": ["slug", "url", "name"], "properties": {
+        "slug": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "name": {"type": "string"},
+        "headline": {"type": "string"}, "location": {"type": "string"}, "about": {"type": "string"}
+      }},
+      "Company": {"type": "object", "required": ["slug", "url", "name"], "properties": {
+        "slug": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "name": {"type": "string"},
+        "description": {"type": "string"}, "website": {"type": "string", "format": "uri"}, "industry": {"type": "string"}, "company_size": {"type": "string"},
+        "headquarters": {"type": "string"}, "founded": {"type": "string"}, "company_type": {"type": "string"}, "specialties": {"type": "string"}
+      }},
+      "Error": {"type": "object", "required": ["error"], "properties": {
+        "error": {"type": "object", "required": ["code", "message"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}}
+      }}
+    }
+  }
+}

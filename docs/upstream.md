@@ -1,0 +1,58 @@
+# LinkedIn web upstream notes
+
+These observations are from ordinary navigation in an authenticated Chrome session. They are not an exhaustive API catalog or a promise that internal endpoints are stable. No credential values or personal response bodies are recorded here.
+
+| Surface | Observed upstream requests | Notes |
+| --- | --- | --- |
+| Jobs home | `/jobs/`; `POST /flagship-web/rsc-action/actions/component`; `POST /flagship-web/rsc-action/actions/server-request` | The latter was seen with an operation named `jobsHome.aboveTheFoldModuleDataUpdate`. The first occurrence of every recommendation is not yet mapped to a specific response. |
+| Job search | `GET /jobs/search-results/`; `POST /flagship-web/jobs/search-results/`; `POST /flagship-web/rsc-action/actions/server-request` | The site takes `keywords` and `start` query parameters. `jobSearchUpdateRequestAction` and a location typeahead operation were observed separately. The rendered result cards have a `job-card-component-ref-{id}` component key in the inspected layout. |
+| Job detail | `GET /jobs/view/{id}/`; `POST /flagship-web/rsc-action/actions/component` | Initial HTML carries some data. The inspected `aboutTheJob` component response also carried the job text. Separate components were observed for company information and similar jobs. |
+| Feed | `GET /feed/`; `POST /flagship-web/feed/foryou/`; Voyager reads | The Flagship response contained React Server Component markers. Voyager requests included the viewer identity, global navigation, settings, job preferences and notification counts. Feed pagination uses the Flagship action described below. The exact upstream source of each individually rendered card field is not isolated. |
+| Personal profile | `GET /in/{slug}/`; `POST /flagship-web/rsc-action/actions/component`; `GET /voyager/api/graphql` | The profile page used `profileCardsAboveActivity` and `profileCardsActivity` components. The inspected Above Activity response contained RSC markers. `voyagerIdentityDashProfiles` also appeared, but the request's presence alone does not establish that it supplies the viewed person's entire profile. |
+| Company profile | `GET /company/{slug}/about/`; `GET /voyager/api/graphql` | `voyagerOrganizationDashCompanies` returned normalized JSON and included a `name` field in the inspected response. The adapter reads the rendered About section's overview and labeled definition list. Each optional field is returned only if present in that layout. |
+| Realtime | `GET /flagship-web/rsc-action/actions/server-stream-request` | Observed `text/event-stream`; stream message schema not mapped. |
+
+## Formats
+
+- Document navigations: `text/html`.
+- Voyager: `GET /voyager/api/graphql` with `queryId` and `variables`; `GET /voyager/api/me` returned normalized JSON with `data` and `included`. The media type observed on these reads was `application/vnd.linkedin.normalized+json+2.1`. Voyager is not the only source behind the current UI.
+- Flagship Web: inspected component requests sent `application/json` and replied with `application/octet-stream`. Some response bodies contained React Server Component serialization; not every action response was shown to use that representation.
+- A read-like presence lookup used `POST /voyager/api/messaging/dash/presenceStatuses` with `application/x-www-form-urlencoded`. HTTP method alone does not establish whether an action writes state.
+
+## Job search facets and filter autocomplete
+
+The current search layout accepts `geoId` for a geography, `f_C` for a company ID, and `f_TPR` for date (`r86400`, `r604800`, `r2592000`). Changing workplace, experience, or employment type in the UI populated **`f_SAL`**, not a separate parameter per category. Observed groups are `225001` (workplace), `227001` (experience), and `226001` (employment type). Within a group, comma-separated values encode multiple selected options; `$` separates groups. Only traced options are exposed. For example, selecting Remote and Hybrid with Full-time yielded `f_SA_id_225001:272001,1621001$f_SA_id_226001:272015` after URL decoding.
+
+Selecting two companies produced `f_C=14226,613034`; the UI preserved the organization IDs as a comma-separated value. Isolating individual selections confirmed `227001` values `278001` (Administrador), `272003` (Director), and `279001` (Ejecutivo), and `226001` value `273001` (Jornada parcial). The quick filters Easy Apply, In My Network, Verified, and Under 10 Applicants were traced to `f_AL=true`, `f_JIYN=true`, `f_VJ=true`, and `f_EA=true`, respectively.
+
+Dynamic suggestions in the search toolbar have visible checkbox labels but no IDs on the input elements. In the observed layout, the checkbox's mounted SDUI Boolean binding ends with `JobSearchResultsPage_SemanticDynamicSuggestionPillSelectBindingKey_<group>:<value>`. The extractor reads the binding from a bounded set of React ancestors, without clicking or executing actions, and reads the checked state from the input. Only observed groups are exposed: `230001` (topics) and `228001` (industries). Selecting `AWS` in a DevOps search produced `f_SA_id_230001:277008`; selecting UX, UI, and Juegos for Product Designer produced `f_SA_id_230001:275014,272014$f_SA_id_228001:288003`. In both cases `keywords` was unchanged. These are query-specific suggestions, not a static list. An unrecognized binding or missing toolbar does not prevent ordinary search results from being returned.
+
+The job search company picker sends the `com.linkedin.sdui.search.filters.requests.FiltersCompanyTypeaheadRequest` Flagship action. Its rendered options do not expose numeric IDs. `/v1/jobs/companies` opens the picker in a temporary tab after the fixed landing search selects its initial job. Opening the panel earlier can lose it during navigation, especially in a background tab. The adapter observes only the response to the typed query; it does not replay the action or click a suggestion. The response is `application/octet-stream` RSC. In the observed layout, the replacement `LazyColumn` contains ordered `TypeaheadItem` rows, each with display text and a company filter binding containing the organization ID. The adapter decodes only that response structure and never executes actions from the payload. A recognized empty column returns an empty list; an unknown response shape fails as an upstream error.
+
+Autocomplete opens the native search location editor and reads the normal suggestion links with origin `JOB_SEARCH_PAGE_LOCATION_AUTOCOMPLETE`. Each link contains its numeric `geoId`. Example: the Buenos Aires autocomplete returned `101279968` for the province and `90009870` for the metro area. Recent locations are not returned as matches and a suggestion is not selected or applied.
+
+A search for Remote, Past Week, and a selected company displayed an explicit no-exact-matches notice and alternative Hybrid positions. The proxy surfaces the notice as `broadened` and does not discard alternatives or certify perfect matches on responses without the notice. The search result header can display exact totals or a lower bound such as `Más de 99 resultados`; the response preserves that qualifier.
+
+## Job detail mapping
+
+The header and About the Job module provide different pieces. The header exposes company link/slug, plain-text location, relative publication date, fixed labels for workplace and employment type, and the call-to-action. In the inspected routes, an external Apply link was labeled as an employer-site action, while Easy Apply was a button. The adapter does not open either. Numeric labels distinguish applying-platform counts from clicks on the external button. A closed posting can retain its original description and a separate `Solicitud enviada` status for the signed-in viewer. Related jobs are collected from the `Más empleos` section and deduplicated.
+
+The separate Job Tracker was observed at `/jobs-tracker/`, with stage changes such as `?stage=applied`, `?stage=saved`, `?stage=interview`, and `?stage=archived`. The applied view includes posting links and stage labels. It is not exposed yet: list completeness, stage transitions and pagination need separate mapping. Notes and contacts on the tracker were not read into the proxy.
+
+## Job search pagination
+
+Using the search UI's Next button changed `start` to `25` and triggered a `POST` to `/flagship-web/jobs/search-results/`. Fresh navigations to the search route with offsets `0`, `25`, and `50` yielded pages 1, 2, and 3, each with 25 distinct cards and a different first job. The search UI also sets `currentJobId` when selecting the first result; it is not necessary for opening a specific result page. Wayfarer maps a one-based page to the observed offset, checks the active page indicator when present, and derives `has_more` from the enabled Next control. Duplicate cards exposed by responsive layouts are deduplicated by job ID.
+
+## Feed pagination and card mapping
+
+The inspected layout virtualizes cards inside the feed's own scrolling container; the document itself may have no scroll range. Scrolling to the bottom reveals a distinct `Load more` / `Cargar más` control outside individual cards. Activating it issued `POST /flagship-web/rsc-action/actions/pagination` with the operation `com.linkedin.sdui.pagers.feed.mainFeed`, a JSON request, and an `application/octet-stream` response with RSC markers. In one trace, five new cards appeared after a click. This is a read-side UI action; Wayfarer leaves the choice of feed sorting in Chrome.
+
+Wayfarer retains cards once mounted, deduplicates by the opaque card key, and advances by less than a viewport per step. It uses a bounded time and load budget rather than promising a fixed number of posts or serializing LinkedIn's internal continuation state. Evidence of an enabled control or surplus collected items is reported separately as `has_more`. No raw request payload or cursor is exposed.
+
+Observed card fields: the post body appears in `expandable-text-box`; profile/company links in the header identify the author in the tested layout; relative time is visible text; hashtags and media have separate markup. On the compact layout, exact counts were associated with the reaction, comment, and repost buttons via their icon IDs. Values are omitted when the parser cannot identify the corresponding field or when the count is abbreviated. This mapping does not yet cover absolute timestamps, every post attachment type, nested reposts, comment threads, or a canonical permalink for cards without a visible link. `Destacados` and `Recientes` were observed in the sort menu; switching the account's preference was not tested.
+
+## Adapter choice and open work
+
+The current adapter lets Chrome execute the site's normal page loads, then maps the rendered results to Wayfarer's own JSON models. It does not implement the internal Voyager or Flagship wire protocol. This keeps the first version usable across two upstream formats without requiring raw credential handling. It also means some source fields are not available and the extraction can break when the page changes.
+
+Next research tasks: map stable cross-request feed continuation, canonical post IDs, and expanded comment and attachment schemas; map remaining job facet surfaces and alternate layouts; identify which responses contain recommendation cards and feed posts; map the lazy-loaded Experience and Education sections on personal profiles; compare rendered field coverage against direct response schemas. Messaging is out of scope. Keep future adapters behind the existing Go interfaces and verify schema changes against sanitized fixtures.
