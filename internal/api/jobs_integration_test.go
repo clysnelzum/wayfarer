@@ -19,23 +19,32 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 		value   string
 		status  int
 		payload string
-		render  bool
+		mode    string
 	}{
-		{"last page", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer"}],"page":2,"match_mode":"results","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"has_more":false`, false},
-		{"past last page", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","result_count":25,"result_count_qualifier":"exact","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"out_of_range":true`, false},
-		{"dropped filter", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","query_evidence":{"keywords":["DevOps"],"start":["25"]}}}`, 502, `"code":"upstream_search_changed"`, false},
-		{"auth required", `{"state":"auth"}`, 503, `"code":"upstream_auth_required"`, false},
-		{"no debugger", ``, 503, `"code":"upstream_debugger_unavailable"`, false},
-		{"expanded recommendations", `{"state":"ok","value":{"items":[{"id":"133","title":"Designer"}],"page":0,"recommendation_status":"budget_reached","sections":[{"title":"More jobs","job_ids":["133"]}]}}`, 200, `"recommendation_status":"budget_reached"`, true},
+		{"last page", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer"}],"page":2,"match_mode":"results","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"has_more":false`, ""},
+		{"search alert off", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer"}],"page":2,"match_mode":"results","alert_enabled":false,"query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"alert_enabled":false`, ""},
+		{"past last page", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","result_count":25,"result_count_qualifier":"exact","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"out_of_range":true`, ""},
+		{"dropped filter", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","query_evidence":{"keywords":["DevOps"],"start":["25"]}}}`, 502, `"code":"upstream_search_changed"`, ""},
+		{"auth required", `{"state":"auth"}`, 503, `"code":"upstream_auth_required"`, ""},
+		{"no debugger", ``, 503, `"code":"upstream_debugger_unavailable"`, ""},
+		{"expanded recommendations", `{"state":"ok","value":{"items":[{"id":"133","title":"Designer"}],"page":0,"recommendation_status":"budget_reached","sections":[{"title":"More jobs","job_ids":["133"]}]}}`, 200, `"recommendation_status":"budget_reached"`, "expanded"},
+		{"unavailable job detail", `{"state":"ok","value":{"not_found":true}}`, 404, `"code":"job_not_found"`, "detail"},
+		{"job detail alert disabled", `{"state":"ok","value":{"job":{"id":"42","title":"Developer","company":"Example","description":"Build software.","similar_job_alert_enabled":false,"compensation_label":"180K USD/yr - 225K USD/yr"}}}`, 200, `"similar_job_alert_enabled":false`, "detail"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := "/v1/jobs?q=DevOps&page=2&under_10_applicants=true"
 			wantURL := "https://www.linkedin.com/jobs/search-results/?f_EA=true&keywords=DevOps&start=25"
 			methods := []string{"Target.createTarget", "Target.attachToTarget"}
-			if tc.render {
+			extractorMarker := "SearchResultsMainContent"
+			switch tc.mode {
+			case "expanded":
 				path = "/v1/jobs?limit=12"
 				wantURL = "https://www.linkedin.com/jobs/"
 				methods = append(methods, "Emulation.setFocusEmulationEnabled")
+			case "detail":
+				path = "/v1/jobs/42"
+				wantURL = "https://www.linkedin.com/jobs/view/42/"
+				extractorMarker = "job.similar_job_alert_enabled"
 			}
 			methods = append(methods, "Page.navigate", "Runtime.evaluate", "Target.closeTarget")
 			closed := make(chan struct{}, 1)
@@ -79,8 +88,8 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 						}
 						result = map[string]string{"frameId": "frame"}
 					case "Runtime.evaluate":
-						if !request.Params.AwaitPromise || !strings.Contains(request.Params.Expression, "SearchResultsMainContent") {
-							t.Error("expected the asynchronous job search extractor")
+						if !request.Params.AwaitPromise || !strings.Contains(request.Params.Expression, extractorMarker) {
+							t.Error("expected the asynchronous job extractor for this route")
 						}
 						result = map[string]any{"result": map[string]any{"value": json.RawMessage(tc.value)}}
 					case "Target.closeTarget":

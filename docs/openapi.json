@@ -126,6 +126,7 @@
           "result_count_label": {"type": "string", "description": "Localized result total as displayed by LinkedIn."},
           "notice": {"type": "string", "description": "Upstream broadened-search or empty-result message when displayed."},
           "selected_job_id": {"type": "string", "description": "ID selected in LinkedIn's results pane when navigation exposes it."},
+          "alert_enabled": {"type": "boolean", "description": "State read from LinkedIn's visible alert switch for this search. Omitted when the switch or its state cannot be identified. The API does not modify the alert."},
           "suggested_facets": {"type": "array", "maxItems": 12, "description": "Recognized dynamic suggestions in toolbar order. Omitted when unavailable.", "items": {"type": "object", "required": ["id", "label", "selected"], "properties": {
             "id": {"type": "string", "pattern": "^(228001|230001):[1-9][0-9]{0,11}$", "description": "Reuse this identifier as returned; do not derive it from a label."},
             "label": {"type": "string", "description": "Localized suggestion label."},
@@ -150,16 +151,25 @@
       "JobSummary": {"type": "object", "required": ["id", "title", "company", "location", "url"], "properties": {
         "id": {"type": "string"}, "title": {"type": "string"}, "company": {"type": "string"}, "location": {"type": "string"}, "url": {"type": "string", "format": "uri"},
         "workplace": {"$ref": "#/components/schemas/Workplace"}, "posted_label": {"type": "string"},
+        "compensation_label": {"type": "string", "description": "Recognized compensation text shown on the card; not a normalized salary."},
+        "benefits_label": {"type": "string", "description": "Recognized benefits text shown on the card, which may be a summary."},
+        "network_label": {"type": "string", "description": "Recognized viewer-specific network label, such as alumni working at the company."},
         "verified": {"const": true}, "promoted": {"const": true}, "viewed": {"const": true}, "saved": {"const": true}, "easy_apply": {"const": true},
         "signals": {"type": "array", "uniqueItems": true, "items": {"type": "string", "enum": ["early_applicant", "actively_reviewing"]}}
       }},
       "Job": {"type": "object", "required": ["id", "title", "company", "url", "description"], "properties": {
         "id": {"type": "string"}, "title": {"type": "string"}, "company": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "description": {"type": "string"},
+        "description_blocks": {"type": "array", "minItems": 1, "maxItems": 128, "description": "Recognized plain-text paragraphs, headings, and flat lists in source order. Omitted when the structure is unavailable or unsupported; use description as the fallback.", "items": {"oneOf": [
+          {"type": "object", "required": ["kind", "text"], "properties": {"kind": {"enum": ["paragraph", "heading"]}, "text": {"type": "string"}}},
+          {"type": "object", "required": ["kind", "ordered", "items"], "properties": {"kind": {"const": "list"}, "ordered": {"type": "boolean"}, "items": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"type": "string"}}}}
+        ]}},
         "company_slug": {"type": "string"}, "location": {"type": "string"}, "posted_label": {"type": "string"},
         "workplace": {"$ref": "#/components/schemas/Workplace"},
         "employment_type": {"type": "string", "enum": ["full_time", "part_time", "contract", "internship", "volunteer", "temporary"]},
         "apply_method": {"type": "string", "enum": ["external", "easy_apply"]},
         "application_status": {"type": "string", "enum": ["open", "closed"]},
+        "compensation_label": {"type": "string", "description": "Recognized compensation text shown in the job header, not a normalized salary."},
+        "similar_job_alert_enabled": {"type": "boolean", "description": "State read from the visible similar-jobs alert switch. Omitted when the switch or its state cannot be identified. This API does not change it."},
         "application_activity": {"type": "object", "required": ["kind", "count", "qualifier"], "properties": {
           "kind": {"type": "string", "enum": ["apply_clicks", "applications"]}, "count": {"type": "integer", "minimum": 0},
           "qualifier": {"$ref": "#/components/schemas/CountQualifier"}

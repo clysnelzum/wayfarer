@@ -34,7 +34,6 @@ func TestReadReusesDebuggerAndReconnectsBeforeNavigation(t *testing.T) {
 			}
 			var result any = struct{}{}
 			switch m.Method {
-			case "Browser.getVersion":
 			case "Target.createTarget":
 				result = map[string]string{"targetId": "temporary"}
 			case "Target.attachToTarget":
@@ -66,6 +65,13 @@ func TestReadReusesDebuggerAndReconnectsBeforeNavigation(t *testing.T) {
 	defer b.Close()
 	for i, wantConnections := range []int32{1, 1, 2} {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		if i == 2 {
+			select {
+			case <-b.conn.done:
+			case <-ctx.Done():
+				t.Fatal("idle reader did not detect debugger disconnect")
+			}
+		}
 		value, err := b.Read(ctx, "https://www.linkedin.com/jobs/", "() => 42")
 		cancel()
 		if err != nil || string(value) != "42" || connections.Load() != wantConnections || closes.Load() != int32(i+1) {
@@ -144,6 +150,8 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 						if m.Params["targetId"] != "test-target" {
 							t.Errorf("unexpected target closed: %v", m.Params)
 						}
+						payload = map[string]bool{"success": true}
+						_ = ws.WriteJSON(map[string]any{"id": m.ID, "result": payload})
 						return
 					default:
 						t.Errorf("unexpected command: %s", m.Method)

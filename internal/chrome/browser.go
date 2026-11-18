@@ -20,9 +20,10 @@ type Browser struct {
 	endpoint string
 	slots    chan struct{}
 
-	mu     sync.Mutex
-	idle   []*cdp
-	closed bool
+	mu      sync.Mutex
+	conn    *cdp
+	dialing *dialAttempt
+	closed  bool
 }
 
 func New(endpoint string) (*Browser, error) {
@@ -38,136 +39,82 @@ func New(endpoint string) (*Browser, error) {
 	return &Browser{endpoint: endpoint, slots: make(chan struct{}, 2)}, nil
 }
 
-type cdp struct {
-	ws *websocket.Conn
-	id int
+type dialAttempt struct {
+	done   chan struct{}
+	cancel context.CancelFunc
+	conn   *cdp
+	err    error
 }
 
-type message struct {
-	ID        int             `json:"id"`
-	Method    string          `json:"method"`
-	SessionID string          `json:"sessionId,omitempty"`
-	Params    any             `json:"params,omitempty"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	Error     *struct {
-		Code int `json:"code"`
-	} `json:"error,omitempty"`
-}
-
-func (c *cdp) call(ctx context.Context, session, method string, params, result any) (err error) {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	deadline, _ := ctx.Deadline()
-	defer func() {
-		if err == nil {
-			return
-		}
-		if cause := ctx.Err(); cause != nil {
-			err = cause
-		} else if !deadline.IsZero() && !time.Now().Before(deadline) {
-			err = context.DeadlineExceeded
-		}
-	}()
-	_ = c.ws.SetWriteDeadline(deadline)
-	_ = c.ws.SetReadDeadline(deadline)
-	interrupted := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		_ = c.ws.UnderlyingConn().SetDeadline(time.Now())
-		close(interrupted)
-	})
-	defer func() {
-		if !stop() {
-			<-interrupted
-		}
-	}()
-	c.id++
-	if err := c.ws.WriteJSON(message{ID: c.id, Method: method, SessionID: session, Params: params}); err != nil {
-		return err
-	}
-	for {
-		var reply message
-		if err := c.ws.ReadJSON(&reply); err != nil {
-			return err
-		}
-		if reply.ID != c.id {
-			continue // CDP events can be interleaved with responses.
-		}
-		if reply.Error != nil {
-			return &commandError{method: method, code: reply.Error.Code}
-		}
-		if result != nil {
-			return json.Unmarshal(reply.Result, result)
-		}
-		return nil
-	}
-}
-
-// Close releases idle debugger connections. It does not close Chrome. In-flight
-// reads release their connections instead of returning them to the pool.
+// Close releases the shared debugger connection. It does not close Chrome.
 func (b *Browser) Close() {
 	b.mu.Lock()
 	b.closed = true
-	idle := b.idle
-	b.idle = nil
+	if b.dialing != nil {
+		b.dialing.cancel()
+	}
+	c := b.conn
+	b.conn = nil
 	b.mu.Unlock()
-	for _, c := range idle {
-		_ = c.ws.Close()
+	if c != nil {
+		c.stop(errors.New("Wayfarer closed the debugger connection"))
 	}
 }
 
 func (b *Browser) acquire(ctx context.Context) (*cdp, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
 		return nil, ErrDebuggerUnavailable
 	}
-	var cached *cdp
-	if n := len(b.idle); n != 0 {
-		cached = b.idle[n-1]
-		b.idle[n-1] = nil
-		b.idle = b.idle[:n-1]
+	if c := b.conn; c != nil && c.alive() {
+		b.mu.Unlock()
+		return c, nil
+	}
+	attempt := b.dialing
+	if attempt == nil {
+		// The handshake belongs to the browser, not to the HTTP caller that
+		// happens to arrive first. Concurrent calls wait on the same attempt.
+		dialCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		attempt = &dialAttempt{done: make(chan struct{}), cancel: cancel}
+		b.dialing = attempt
+		go b.connect(dialCtx, attempt)
 	}
 	b.mu.Unlock()
-	if cached != nil {
-		// Retry a stale connection only before any navigation has been sent.
-		probe, cancel := context.WithTimeout(ctx, time.Second)
-		err := cached.call(probe, "", "Browser.getVersion", nil, nil)
-		cancel()
-		if err == nil {
-			return cached, nil
-		}
-		_ = cached.ws.Close()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-attempt.done:
+		return attempt.conn, attempt.err
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	dialer := websocket.Dialer{HandshakeTimeout: 12 * time.Second}
-	ws, resp, err := dialer.DialContext(ctx, b.endpoint, nil)
-	if err != nil {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%w: %w", ErrDebuggerUnavailable, err)
-	}
-	ws.SetReadLimit(4 << 20)
-	return &cdp{ws: ws}, nil
 }
 
-func (b *Browser) release(c *cdp, reusable bool) {
-	if reusable {
-		b.mu.Lock()
-		if !b.closed {
-			b.idle = append(b.idle, c)
-			b.mu.Unlock()
-			return
-		}
-		b.mu.Unlock()
+func (b *Browser) connect(ctx context.Context, attempt *dialAttempt) {
+	defer attempt.cancel()
+	dialer := websocket.Dialer{}
+	ws, resp, err := dialer.DialContext(ctx, b.endpoint, nil)
+	if err != nil && resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
 	}
-	_ = c.ws.Close()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	defer close(attempt.done)
+	b.dialing = nil
+	switch {
+	case b.closed:
+		if ws != nil {
+			_ = ws.Close()
+		}
+		attempt.err = ErrDebuggerUnavailable
+	case err != nil:
+		attempt.err = fmt.Errorf("%w: %w", ErrDebuggerUnavailable, err)
+	default:
+		b.conn = newCDP(ws)
+		attempt.conn = b.conn
+	}
 }
 
 // Read navigates a temporary tab in Chrome's existing default browser context.
@@ -204,23 +151,26 @@ func (b *Browser) read(ctx context.Context, pageURL, expression string, render b
 	if err != nil {
 		return nil, err
 	}
-	reusable := false
-	defer func() { b.release(c, reusable) }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var target struct{ TargetID string }
-	if err := c.call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": true}, &target); err != nil {
+	// Once creation is sent, wait briefly for the target ID even if the
+	// caller leaves, so the tab can still be closed.
+	create, stopCreate := context.WithTimeout(context.Background(), 2*time.Second)
+	err = c.call(create, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": true}, &target)
+	stopCreate()
+	if err != nil {
 		return nil, err
 	}
 	if target.TargetID == "" {
 		return nil, errors.New("Chrome returned no target ID")
 	}
 	defer func() {
-		// Try to close the tab even after cancellation. Never reuse the socket
-		// unless the browser acknowledged closing it and the read completed.
+		// Close only this request's tab, even if the HTTP request was canceled.
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		var closed struct{ Success bool }
-		err := c.call(cleanup, "", "Target.closeTarget", map[string]string{"targetId": target.TargetID}, &closed)
-		reusable = reusable && err == nil && closed.Success
+		_ = c.call(cleanup, "", "Target.closeTarget", map[string]string{"targetId": target.TargetID}, nil)
 	}()
 	var attached struct{ SessionID string }
 	if err := c.call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": target.TargetID, "flatten": true}, &attached); err != nil {
@@ -283,10 +233,8 @@ func (b *Browser) read(ctx context.Context, pageURL, expression string, render b
 			}
 			switch envelope.State {
 			case "auth":
-				reusable = true
 				return nil, ErrAuth
 			case "ok":
-				reusable = true
 				return envelope.Value, nil
 			default:
 				return nil, errors.New("unexpected extractor result")
@@ -299,13 +247,6 @@ func (b *Browser) read(ctx context.Context, pageURL, expression string, render b
 		}
 	}
 }
-
-type commandError struct {
-	method string
-	code   int
-}
-
-func (e *commandError) Error() string { return fmt.Sprintf("CDP %s failed (%d)", e.method, e.code) }
 
 var (
 	ErrAuth                = errors.New("Chrome session is not authenticated or needs attention")

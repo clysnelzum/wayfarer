@@ -1,5 +1,5 @@
 async (tools, recommendationLimit = 0, resolveSource = '') => {
-  const {clean, visible, number, cards, recommendationLinks} = tools;
+  const {clean, visible, number, cards, recommendationLinks, switchState} = tools;
   const stableKeys = ['keywords', 'start', 'geoId', 'f_C', 'f_TPR', 'f_SAL', 'f_AL', 'f_JIYN', 'f_VJ', 'f_EA', 'origin', 'originToLandingJobPostings'];
   if (resolveSource) {
     const home = () => /^\/jobs\/?$/.test(location.pathname) ? document.querySelector('main, [role="main"]') : null;
@@ -49,17 +49,22 @@ async (tools, recommendationLimit = 0, resolveSource = '') => {
     return sections;
   }
 
+  let toolbarHydrating = false;
   function suggestedFacets() {
     const inputs = document.querySelectorAll('[componentkey="JobsSearchFilters"] input[type="checkbox"]');
     const rows = new Map();
+    toolbarHydrating = false;
     for (const input of inputs) {
       if (!visible(input)) continue;
       const label = clean(input.labels?.[0]?.innerText);
       if (!label || label.length > 300) continue;
       // The checkbox has no stable ID in the DOM. Read its known SDUI
       // binding from bounded React ancestors, without running their actions.
-      const key = Object.keys(input).find(k => k.startsWith('__reactFiber$'));
-      if (!key) continue;
+      const key = Object.getOwnPropertyNames(input).find(k => k.startsWith('__reactFiber$'));
+      if (!key) {
+        toolbarHydrating = true;
+        continue;
+      }
       const ids = new Set();
       for (let f = input[key], depth = 0; f && depth < 16; f = f.return, depth++) {
         const props = f.memoizedProps;
@@ -75,6 +80,19 @@ async (tools, recommendationLimit = 0, resolveSource = '') => {
       if (rows.size === 12) break;
     }
     return [...rows.values()];
+  }
+
+  function searchAlert(main) {
+    const controls = main.querySelectorAll('[componentkey^="JobSearchAlertToggleRef_"] [role="switch"]');
+    let state;
+    for (const control of controls) {
+      if (!visible(control)) continue;
+      const enabled = switchState(control);
+      // Do not select an arbitrary state if visible responsive copies disagree.
+      if (enabled === undefined || (state !== undefined && state !== enabled)) return undefined;
+      state = enabled;
+    }
+    return state;
   }
 
   function snapshot() {
@@ -114,8 +132,10 @@ async (tools, recommendationLimit = 0, resolveSource = '') => {
     const evidence = Object.fromEntries(stableKeys.filter(key => query.has(key)).map(key => [key, query.getAll(key)]));
     const notice = broadened || (items.length ? '' : empty);
     const facets = suggestedFacets();
+    const alert = searchAlert(main);
     return {items, page, has_more: hasMore, match_mode: broadened ? 'broadened' : items.length ? 'results' : 'no_results',
       query_evidence: evidence, ...(facets.length ? {suggested_facets: facets} : {}), ...(notice ? {notice: notice.slice(0, 750)} : {}),
+      ...(alert !== undefined ? {alert_enabled: alert} : {}),
       ...(count !== undefined ? {result_count: count, result_count_qualifier: qualifier, result_count_label: countLabel[0]} : {}),
       ...(where ? {location_label: where} : {}), ...(/^[1-9]\d{0,19}$/.test(selected || '') ? {selected_job_id: selected} : {})};
   }
@@ -189,12 +209,18 @@ async (tools, recommendationLimit = 0, resolveSource = '') => {
   const pause = () => new Promise(resolve => setTimeout(resolve, 230));
   let same = 0;
   const deadline = performance.now() + 3500;
+  // A visible toolbar can be server-rendered before React attaches the
+  // suggested facet bindings. Give it a short grace period without making
+  // optional filter metadata a prerequisite for returning the job cards.
+  const hydrationGrace = performance.now() + 1400;
   for (let i = 0; i < 8 && performance.now() < deadline; i++) {
     await pause();
     const current = snapshot();
     if (!current) return null;
     same = JSON.stringify(current) === JSON.stringify(last) ? same + 1 : 0;
-    if (same >= 2) return current.page === 0 && recommendationLimit ? loadRecommendations(current) : current;
+    if (same >= 2 && (!toolbarHydrating || performance.now() >= hydrationGrace)) {
+      return current.page === 0 && recommendationLimit ? loadRecommendations(current) : current;
+    }
     last = current;
   }
   // If the page never settles, allow the caller's bounded reader to retry.

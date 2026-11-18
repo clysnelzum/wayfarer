@@ -16,6 +16,9 @@ var jobsExpression string
 //go:embed job.js
 var jobExpression string
 
+//go:embed job_description.js
+var jobDescriptionExpression string
+
 //go:embed job_cards.js
 var jobCardExpression string
 
@@ -82,6 +85,7 @@ type JobSearchInfo struct {
 	ResultCountLabel     string              `json:"result_count_label,omitempty"`
 	Notice               string              `json:"notice,omitempty"`
 	SelectedJobID        string              `json:"selected_job_id,omitempty"`
+	AlertEnabled         *bool               `json:"alert_enabled,omitempty"`
 	SuggestedFacets      []JobSuggestedFacet `json:"suggested_facets,omitempty"`
 }
 
@@ -92,40 +96,53 @@ type JobSuggestedFacet struct {
 }
 
 type JobSummary struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Company     string   `json:"company"`
-	Location    string   `json:"location"`
-	URL         string   `json:"url"`
-	Workplace   string   `json:"workplace,omitempty"`
-	PostedLabel string   `json:"posted_label,omitempty"`
-	Verified    bool     `json:"verified,omitempty"`
-	Promoted    bool     `json:"promoted,omitempty"`
-	Viewed      bool     `json:"viewed,omitempty"`
-	Saved       bool     `json:"saved,omitempty"`
-	EasyApply   bool     `json:"easy_apply,omitempty"`
-	Signals     []string `json:"signals,omitempty"`
+	ID                string   `json:"id"`
+	Title             string   `json:"title"`
+	Company           string   `json:"company"`
+	Location          string   `json:"location"`
+	URL               string   `json:"url"`
+	Workplace         string   `json:"workplace,omitempty"`
+	PostedLabel       string   `json:"posted_label,omitempty"`
+	CompensationLabel string   `json:"compensation_label,omitempty"`
+	BenefitsLabel     string   `json:"benefits_label,omitempty"`
+	NetworkLabel      string   `json:"network_label,omitempty"`
+	Verified          bool     `json:"verified,omitempty"`
+	Promoted          bool     `json:"promoted,omitempty"`
+	Viewed            bool     `json:"viewed,omitempty"`
+	Saved             bool     `json:"saved,omitempty"`
+	EasyApply         bool     `json:"easy_apply,omitempty"`
+	Signals           []string `json:"signals,omitempty"`
 }
 
 type Job struct {
-	ID                  string                  `json:"id"`
-	Title               string                  `json:"title"`
-	Company             string                  `json:"company"`
-	URL                 string                  `json:"url"`
-	Description         string                  `json:"description"`
-	CompanySlug         string                  `json:"company_slug,omitempty"`
-	Location            string                  `json:"location,omitempty"`
-	PostedLabel         string                  `json:"posted_label,omitempty"`
-	Workplace           string                  `json:"workplace,omitempty"`
-	EmploymentType      string                  `json:"employment_type,omitempty"`
-	ApplyMethod         string                  `json:"apply_method,omitempty"`
-	ApplicationStatus   string                  `json:"application_status,omitempty"`
-	ApplicationActivity *JobApplicationActivity `json:"application_activity,omitempty"`
-	ViewerApplication   *JobViewerApplication   `json:"viewer_application,omitempty"`
-	Verified            bool                    `json:"verified,omitempty"`
-	Promoted            bool                    `json:"promoted,omitempty"`
-	Saved               *bool                   `json:"saved,omitempty"`
-	RelatedJobs         []JobSummary            `json:"related_jobs,omitempty"`
+	ID                     string                  `json:"id"`
+	Title                  string                  `json:"title"`
+	Company                string                  `json:"company"`
+	URL                    string                  `json:"url"`
+	Description            string                  `json:"description"`
+	DescriptionBlocks      []JobDescriptionBlock   `json:"description_blocks,omitempty"`
+	CompanySlug            string                  `json:"company_slug,omitempty"`
+	Location               string                  `json:"location,omitempty"`
+	PostedLabel            string                  `json:"posted_label,omitempty"`
+	CompensationLabel      string                  `json:"compensation_label,omitempty"`
+	Workplace              string                  `json:"workplace,omitempty"`
+	EmploymentType         string                  `json:"employment_type,omitempty"`
+	ApplyMethod            string                  `json:"apply_method,omitempty"`
+	ApplicationStatus      string                  `json:"application_status,omitempty"`
+	SimilarJobAlertEnabled *bool                   `json:"similar_job_alert_enabled,omitempty"`
+	ApplicationActivity    *JobApplicationActivity `json:"application_activity,omitempty"`
+	ViewerApplication      *JobViewerApplication   `json:"viewer_application,omitempty"`
+	Verified               bool                    `json:"verified,omitempty"`
+	Promoted               bool                    `json:"promoted,omitempty"`
+	Saved                  *bool                   `json:"saved,omitempty"`
+	RelatedJobs            []JobSummary            `json:"related_jobs,omitempty"`
+}
+
+type JobDescriptionBlock struct {
+	Kind    string   `json:"kind"`
+	Text    string   `json:"text,omitempty"`
+	Ordered *bool    `json:"ordered,omitempty"`
+	Items   []string `json:"items,omitempty"`
 }
 
 type JobApplicationActivity struct {
@@ -280,7 +297,7 @@ func (c Client) Job(ctx context.Context, id string) (Job, error) {
 	v, err := read[struct {
 		Job      Job  `json:"job"`
 		NotFound bool `json:"not_found"`
-	}](ctx, c.Reader, "/jobs/view/"+id+"/", jobScript(jobExpression))
+	}](ctx, c.Reader, "/jobs/view/"+id+"/", "() => ("+jobExpression+")(("+jobCardExpression+"), ("+jobDescriptionExpression+"))")
 	if err != nil {
 		return Job{}, err
 	}

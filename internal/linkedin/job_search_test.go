@@ -26,7 +26,8 @@ func TestJobFiltersAndBroadenedResults(t *testing.T) {
 			t.Fatalf("unexpected request: %s", raw)
 		}
 		return json.Marshal(map[string]any{
-			"items": []JobSummary{{ID: "42", Workplace: "hybrid"}}, "page": 2, "has_more": false,
+			"items": []JobSummary{{ID: "42", Workplace: "hybrid", CompensationLabel: "180K USD/yr - 225K USD/yr", BenefitsLabel: "1 prestación", NetworkLabel: "5 antiguos alumnos trabajan aquí"}},
+			"page":  2, "has_more": false,
 			"match_mode": "broadened", "result_count": 3, "result_count_qualifier": "exact", "location_label": "Greater Buenos Aires",
 			"notice": "We couldn't find exact matches", "query_evidence": u.Query(), "selected_job_id": "42",
 		})
@@ -39,6 +40,10 @@ func TestJobFiltersAndBroadenedResults(t *testing.T) {
 	if err != nil || v.Search == nil || v.Search.MatchMode != "broadened" || v.Search.ResultCount == nil || *v.Search.ResultCount != 3 ||
 		len(v.Items) != 1 || v.Items[0].Workplace != "hybrid" || v.Search.Notice == "" || v.Search.SelectedJobID != "42" {
 		t.Fatalf("unexpected filtered response: %+v (%v)", v, err)
+	}
+	card := v.Items[0]
+	if card.CompensationLabel != "180K USD/yr - 225K USD/yr" || card.BenefitsLabel != "1 prestación" || card.NetworkLabel != "5 antiguos alumnos trabajan aquí" {
+		t.Fatalf("lost job card labels: %+v", card)
 	}
 }
 

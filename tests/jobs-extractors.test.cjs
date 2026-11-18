@@ -29,7 +29,8 @@ function harness(url, main, readCards, filterInputs = []) {
     getComputedStyle: () => ({overflowY: 'auto'}),
     document: {
       querySelector: () => main(++observations),
-      querySelectorAll: selector => selector === '[componentkey="JobsSearchFilters"] input[type="checkbox"]' ? filterInputs : [],
+      querySelectorAll: selector => selector === '[componentkey="JobsSearchFilters"] input[type="checkbox"]' ?
+        (typeof filterInputs === 'function' ? filterInputs(observations) : filterInputs) : [],
     },
   });
   const helpers = vm.runInContext(script('job_cards.js'), env);
@@ -95,6 +96,45 @@ test('exposes available suggestions in toolbar order without executing actions',
     {id: '230001:277008', label: 'AWS', selected: true},
     {id: '228001:282003', label: 'Servicios de TI', selected: false},
   ]);
+});
+
+test('waits briefly for visible facet bindings to hydrate after the cards settle', async () => {
+  const bare = node();
+  bare.labels = [node('AWS')];
+  const ready = {...bare};
+  Object.defineProperty(ready, '__reactFiber$late', {value: {memoizedProps: {
+    selectedExpression: {expression: {bindableBoolean: {key: {key: {value: {
+      id: 'JobSearchResultsPage_SemanticDynamicSuggestionPillSelectBindingKey_230001:277008',
+    }}}}}},
+  }}});
+  const url = 'https://www.linkedin.com/jobs/search-results/?keywords=DevOps';
+  const h = harness(url, () => node(''), () => [{id: '42'}], n => [n < 5 ? bare : ready]);
+  assert.deepEqual(plain(await h.extract()).suggested_facets, [{id: '230001:277008', label: 'AWS', selected: false}]);
+  const unrecognized = harness(url, () => node(''), () => [{id: '42'}], [bare]);
+  const fallback = plain(await unrecognized.extract());
+  assert.deepEqual(fallback.items, [{id: '42'}]);
+  assert.equal(fallback.suggested_facets, undefined);
+});
+
+test('reads the current search alert without mistaking an unknown state for off', async () => {
+  const selector = '[componentkey^="JobSearchAlertToggleRef_"] [role="switch"]';
+  const url = 'https://www.linkedin.com/jobs/search-results/?keywords=DevOps&f_AL=true';
+  const off = {...node(), tagName: 'INPUT', type: 'checkbox', checked: false};
+  const on = node('', {attrs: {'aria-checked': 'true'}});
+  const hidden = node('', {hidden: true, attrs: {'aria-checked': 'true'}});
+  const invalid = node('', {attrs: {'aria-checked': 'mixed'}});
+  const snapshot = (controls, empty) => node(empty ? '0 results' : '', {children: {[selector]: controls}});
+  for (const [controls, expected, empty] of [
+    [[off, hidden], false, false], [[on], true, true], [[off, off], false, false],
+    [[off, on], undefined, false], [[invalid], undefined, false], [[], undefined, false],
+  ]) {
+    const h = harness(url, () => snapshot(controls, empty), () => empty ? [] : [{id: '42'}]);
+    const result = plain(await h.extract());
+    assert.equal(result.alert_enabled, expected);
+    assert.equal(result.match_mode, empty ? 'no_results' : 'results');
+  }
+  const late = harness(url, n => snapshot([n < 3 ? off : on], false), () => [{id: '42'}]);
+  assert.equal(plain(await late.extract()).alert_enabled, true);
 });
 
 test('does not confuse a skeleton or mismatched page indicator with an empty search', async () => {
@@ -184,6 +224,23 @@ test('scrolls recommendations only on request and keeps unique cards as earlier 
   assert.deepEqual(expanded.items.map(x => x.id), ['41', '42', '43']);
   assert.equal(expanded.recommendation_status, 'limit_reached');
   assert.ok(main.scrollTop > 0);
+});
+
+test('preserves explicit compensation, benefits and alumni labels without inferring absent values', () => {
+  const card = (id, labels) => node('', {attrs: {componentkey: `job-card-component-ref-${id}`}, children: {
+    p: [node('DevOps Engineer'), node('Example Co'), node('United States'), ...labels.map(label => node(label))],
+  }});
+  const helpers = harness('https://www.linkedin.com/jobs/search-results/', () => null).helpers;
+  const items = plain(helpers.cards(node('', {children: {[jobCards]: [
+    card('81', ['180K USD/yr - 225K USD/yr', 'Servicios médicos, plan de pensiones 401(k)', '5 antiguos alumnos trabajan aquí']),
+    card('82', ['Posted 1 day ago', 'Estimate discussed during interview', '501 employees']),
+  ]}}), true));
+  assert.equal(items[0].compensation_label, '180K USD/yr - 225K USD/yr');
+  assert.equal(items[0].benefits_label, 'Servicios médicos, plan de pensiones 401(k)');
+  assert.equal(items[0].network_label, '5 antiguos alumnos trabajan aquí');
+  assert.equal(items[1].compensation_label, undefined);
+  assert.equal(items[1].benefits_label, undefined);
+  assert.equal(items[1].network_label, undefined);
 });
 
 test('maps observed job card signals while deduplicating responsive copies', () => {
