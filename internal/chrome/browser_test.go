@@ -78,7 +78,7 @@ func TestReadReusesDebuggerAndReconnectsBeforeNavigation(t *testing.T) {
 }
 
 func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
-	for _, state := range []string{"ok", "auth"} {
+	for _, state := range []string{"ok", "auth", "rendered"} {
 		t.Run(state, func(t *testing.T) {
 			observed := make(chan []string, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +116,11 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 							t.Errorf("unexpected attach params: %v", m.Params)
 						}
 						payload = map[string]string{"sessionId": "test-session"}
+					case "Emulation.setFocusEmulationEnabled":
+						if state != "rendered" || m.SessionID != "test-session" || m.Params["enabled"] != true {
+							t.Errorf("unexpected focus emulation: %+v", m)
+						}
+						payload = struct{}{}
 					case "Page.navigate":
 						if m.SessionID != "test-session" || m.Params["url"] != "https://www.linkedin.com/jobs/" {
 							t.Errorf("unexpected navigation: %+v", m)
@@ -130,7 +135,11 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 							_ = ws.WriteJSON(map[string]any{"id": m.ID, "error": map[string]int{"code": -32000}})
 							continue
 						}
-						payload = map[string]any{"result": map[string]any{"value": map[string]any{"state": state, "value": map[string]int{"count": 1}}}}
+						resultState := state
+						if state == "rendered" {
+							resultState = "ok"
+						}
+						payload = map[string]any{"result": map[string]any{"value": map[string]any{"state": resultState, "value": map[string]int{"count": 1}}}}
 					case "Target.closeTarget":
 						if m.Params["targetId"] != "test-target" {
 							t.Errorf("unexpected target closed: %v", m.Params)
@@ -151,7 +160,11 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			got, err := b.Read(ctx, "https://www.linkedin.com/jobs/", "() => ({count: 1})")
+			read := b.Read
+			if state == "rendered" {
+				read = b.ReadRendered
+			}
+			got, err := read(ctx, "https://www.linkedin.com/jobs/", "() => ({count: 1})")
 			if state == "auth" {
 				if !errors.Is(err, ErrAuth) {
 					t.Fatalf("got %v, want ErrAuth", err)
@@ -162,7 +175,11 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 					t.Fatalf("unexpected result: %s (%v)", got, err)
 				}
 			}
-			want := []string{"Target.createTarget", "Target.attachToTarget", "Page.navigate", "Runtime.evaluate", "Runtime.evaluate", "Target.closeTarget"}
+			want := []string{"Target.createTarget", "Target.attachToTarget"}
+			if state == "rendered" {
+				want = append(want, "Emulation.setFocusEmulationEnabled")
+			}
+			want = append(want, "Page.navigate", "Runtime.evaluate", "Runtime.evaluate", "Target.closeTarget")
 			select {
 			case got := <-observed:
 				if !reflect.DeepEqual(got, want) {

@@ -34,6 +34,8 @@ Invoke-RestMethod 'http://127.0.0.1:8765/v1/jobs?q=DevOps' `
 | --- | --- |
 | `GET /healthz` | `{"status":"ok"}`. Verifies that the API is up, not that Chrome or LinkedIn is reachable. |
 | `GET /v1/jobs` | Recommended jobs with `items` and visible recommendation `sections` when their membership is identifiable. Each item has `id`, `title`, `company`, `location`, and `url`. |
+| `GET /v1/jobs?limit=30` | Up to 30 recommended jobs, including sections loaded by scrolling when available. Accepts 1–50 and cannot be combined with keyword search or filters. |
+| `GET /v1/jobs?source=preferences&page=2` | The native **Show all** search from a recommendations section. Use `sections[].source` from the recommendations response. Supports `preferences` and `profile_match`; only `page` and `source_ref` can be combined with `source`. |
 | `GET /v1/jobs?q=DevOps&page=2` | Keyword search with typed filters, `items`, `pagination`, and search metadata. `page` defaults to 1. |
 | `GET /v1/jobs/locations?q=Buenos+Aires` | LinkedIn location autocomplete. Pass the returned `id` as `geo_id` in a job search. |
 | `GET /v1/jobs/companies?q=Microsoft` | LinkedIn job-search company autocomplete. Returns organization IDs, names, and industry labels when present. Use the IDs as `company_id` or `company_ids`. |
@@ -46,13 +48,15 @@ For service integrations, use the [OpenAPI contract](docs/openapi.json). A `slug
 
 Feed cards include an opaque `id`, rendered `text`, and a separate `content` body. Author, permalink, relative publication label, hashtags, media, exact engagement counts, and a sponsored marker are returned when detected. `has_more` is only present when there is evidence of more cards; it is not a continuation token. `load_status` distinguishes the initial batch, reaching the requested limit, hitting the time/load budget, seeing no more controls, and a load that did not advance. Requests start fresh and may return fewer items than requested. Media URLs can expire.
 
-### Job search and detail
+### Job recommendations, search, and detail
+
+Omit `limit` to read only the initial recommendation panels. When `limit` is supplied, `recommendation_status` reports `limit_reached`, `no_more_observed`, or `budget_reached`. The latter two can return fewer items than requested. The proxy scrolls the ordinary recommendations view without opening recent searches or making any changes to listings. When a section has an identifiable native **Show all** link, it includes a `source` value. Request that source separately to run its personalized search; this is not equivalent to an ordinary keyword search. A missing section can return `404 recommendation_source_unavailable`. Pass `sections[].source_ref` with the matching `source` to open the exact link context returned with a section, and reuse `search.source_ref` and `pagination.next_page` for later pages. Wayfarer encrypts the reference; it expires after ten minutes or a server restart and does not replace API authentication. A `410 recommendation_source_ref_unavailable` response means the frontend should reload recommendations. The reference pins the query inputs, not the live results or ranking.
 
 Example: `GET /v1/jobs?q=DevOps&geo_id=90009870&workplace=remote,hybrid&posted_within=week`.
 
 | Filter | Accepted values |
 | --- | --- |
-| `geo_id` | Numeric LinkedIn geography ID from `/v1/jobs/locations`. |
+| `geo_id` or `geo_ids` | Numeric LinkedIn geography ID or up to 20 comma-separated IDs from `/v1/jobs/locations`. Use only one of these parameters. |
 | `company_id` or `company_ids` | Numeric LinkedIn organization ID or up to 20 comma-separated IDs from `/v1/jobs/companies`, not company slugs. Use only one of these parameters. |
 | `posted_within` | `day`, `week`, `month` |
 | `workplace` | `remote`, `hybrid`, `onsite` |
@@ -75,7 +79,7 @@ Responses are JSON and are not cached. Errors use `{"error":{"code":"…","messa
 
 ## Scope
 
-This is not a complete LinkedIn API. Personal profiles are limited to their professional summary; experience and education are not mapped yet. Company profiles use the About page only. There are no messaging or contact-info endpoints. Job search supports pagination. The feed supports bounded in-page loading but not continuation across HTTP requests, fully expanded comment threads, or write actions. Job recommendations are still limited to initially rendered items. Extraction currently targets the observed Spanish and English interface. The `/v1` contract is independent of LinkedIn's markup, but upstream layout changes may require adapter updates. The API uses a temporary background tab per request and closes it before reusing its debugger connection; it does not reuse or navigate the user's open tabs. An interrupted process may leave a temporary tab behind.
+This is not a complete LinkedIn API. Personal profiles are limited to their professional summary; experience and education are not mapped yet. Company profiles use the About page only. There are no messaging or contact-info endpoints. Job search supports pagination. The feed supports bounded in-page loading but not continuation across HTTP requests, fully expanded comment threads, or write actions. Expanded job recommendations are a bounded scan, not a continuation across HTTP requests. Extraction currently targets the observed Spanish and English interface. The `/v1` contract is independent of LinkedIn's markup, but upstream layout changes may require adapter updates. The API uses a temporary background tab per request and closes it before reusing its debugger connection; it does not reuse or navigate the user's open tabs. An interrupted process may leave a temporary tab behind.
 
 - `cmd/wayfarer/`: server setup
 - `internal/api/`: versioned routes and response handling

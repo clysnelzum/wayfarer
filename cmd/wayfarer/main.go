@@ -40,7 +40,7 @@ func main() {
 		Handler:           api.New(token, linkedin.Client{Reader: browser}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      25 * time.Second,
+		WriteTimeout:      30 * time.Second, // Allow the rendered read and tab cleanup to finish.
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 		BaseContext:       func(net.Listener) context.Context { return ctx },

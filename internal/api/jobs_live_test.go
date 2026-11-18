@@ -28,7 +28,7 @@ func TestLiveJobsHTTP(t *testing.T) {
 	server := httptest.NewServer(New(token, linkedin.Client{Reader: browser}))
 	defer server.Close()
 	client := server.Client()
-	client.Timeout = 25 * time.Second
+	client.Timeout = 29 * time.Second
 
 	get := func(path string, authorized bool) (int, []byte) {
 		t.Helper()
@@ -56,6 +56,27 @@ func TestLiveJobsHTTP(t *testing.T) {
 
 	if code, _ := get("/v1/jobs?q=DevOps", false); code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated search returned HTTP %d", code)
+	}
+	for _, tc := range []struct {
+		path  string
+		limit int
+	}{
+		{"/v1/jobs", 0},
+		{"/v1/jobs?limit=30", 30},
+	} {
+		code, body := get(tc.path, true)
+		if code != http.StatusOK {
+			t.Fatalf("%s returned HTTP %d: %s", tc.path, code, body)
+		}
+		var value linkedin.JobResults
+		if err := json.Unmarshal(body, &value); err != nil {
+			t.Fatal(err)
+		}
+		if value.Items == nil || value.Pagination != nil || value.Search != nil ||
+			(tc.limit != 0 && len(value.Items) > tc.limit) || (value.RecommendationStatus != "") != (tc.limit != 0) {
+			t.Fatalf("%s returned invalid recommendation metadata", tc.path)
+		}
+		t.Logf("%s returned %d recommendations in %d sections (%s)", tc.path, len(value.Items), len(value.Sections), value.RecommendationStatus)
 	}
 	for _, tc := range []struct {
 		path string

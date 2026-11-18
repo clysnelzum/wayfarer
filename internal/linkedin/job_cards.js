@@ -66,5 +66,20 @@
     }
     return [...rows.values()];
   }
-  return {clean, visible, workplace, type, dateLabel, number, cards};
+  function recommendationLinks(root) {
+    const out = [];
+    for (const a of root.querySelectorAll('a[href*="originToLandingJobPostings="]')) {
+      if (!visible(a) || !/^(?:mostrar todo|ver todo|show all|see all)$/i.test(clean(a.innerText))) continue;
+      const url = new URL(a.href);
+      if (url.origin !== location.origin || url.pathname !== '/jobs/search-results/' || url.searchParams.has('currentJobId')) continue;
+      const keys = ['origin', 'keywords', 'geoId', 'originToLandingJobPostings'];
+      if (keys.some(key => url.searchParams.getAll(key).length !== 1)) continue;
+      const [origin, keywords, locations, seed] = keys.map(k => url.searchParams.get(k));
+      const mode = origin.replace(/^JobSearchOrigin_/, '');
+      const source = mode === 'PREFERENCES_LANDING' ? 'preferences' : mode === 'QUALIFICATION_LANDING' ? 'profile_match' : '';
+      if (source) out.push({source, origin, keywords, locations, seed});
+    }
+    return out;
+  }
+  return {clean, visible, workplace, type, dateLabel, number, cards, recommendationLinks};
 })()

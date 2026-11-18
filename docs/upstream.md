@@ -39,7 +39,15 @@ The header and About the Job module provide different pieces. The header exposes
 
 The separate Job Tracker was observed at `/jobs-tracker/`, with stage changes such as `?stage=applied`, `?stage=saved`, `?stage=interview`, and `?stage=archived`. The applied view includes posting links and stage labels. It is not exposed yet: list completeness, stage transitions and pagination need separate mapping. Notes and contacts on the tracker were not read into the proxy.
 
+## Job home pagination
+
+The job home page appends modules to `JobsHomeFeedModuleListCollection`, a server-driven `LazyColumn`. Scrolling past the initial panels loaded a separate recent-search module and a third recommendations panel. The scroll triggered `POST /flagship-web/rsc-action/actions/pagination` with operation `com.linkedin.sdui.pagers.jobseeker.jobsHomeFeedModuleList`. The adapter lets the page issue this action itself, collects only parseable job cards, and does not click recent searches or section `Show all` links. Chrome's default hidden tab can scroll without triggering the pagination action; expanded requests enable CDP focus emulation on the temporary tab so visibility-dependent loading can run without bringing Chrome forward. A quiet scroll boundary is not proof that the personalized catalogue is exhausted.
+
+The preferences and profile-match sections expose native `Show all` links carrying `keywords`, `geoId`, `origin`, and `originToLandingJobPostings`. Clicking the profile-match link returned two postings in one observation; opening just the same keywords and geography in a separate tab returned eleven. The preferences link accepted a comma-separated `geoId` list. Clicking its Next button retained the canonical `PREFERENCES_LANDING` origin and geographies, added `start=25`, and removed the first-page seed posting IDs. Wayfarer resolves the supported links afresh from the signed-in home page, does not return the seed context, and validates the actual navigation. A later home snapshot showed preferences and recent searches but no profile-match section, so the latter is optional rather than a permanent search preset.
+
 ## Job search pagination
+
+The legacy `/jobs/search/` route redirected to the Flagship `/jobs/search-results` layout in the authenticated session. A trial with `sortBy=DD` retained the query key but exposed no sort control in the toolbar. URL retention alone is not evidence of sort behavior, so no sort parameter is exposed.
 
 Using the search UI's Next button changed `start` to `25` and triggered a `POST` to `/flagship-web/jobs/search-results/`. Fresh navigations to the search route with offsets `0`, `25`, and `50` yielded pages 1, 2, and 3, each with 25 distinct cards and a different first job. The search UI also sets `currentJobId` when selecting the first result; it is not necessary for opening a specific result page. Wayfarer maps a one-based page to the observed offset, checks the active page indicator when present, and derives `has_more` from the enabled Next control. Duplicate cards exposed by responsive layouts are deduplicated by job ID.
 

@@ -174,6 +174,16 @@ func (b *Browser) release(c *cdp, reusable bool) {
 // expression is supplied only by trusted extractors compiled into the binary.
 // It may return a promise and must resolve to null until there is a usable result.
 func (b *Browser) Read(ctx context.Context, pageURL, expression string) (json.RawMessage, error) {
+	return b.read(ctx, pageURL, expression, false)
+}
+
+// ReadRendered allows visibility-dependent DOM loading in a temporary tab.
+// The emulation is scoped to that tab and does not bring it to the foreground.
+func (b *Browser) ReadRendered(ctx context.Context, pageURL, expression string) (json.RawMessage, error) {
+	return b.read(ctx, pageURL, expression, true)
+}
+
+func (b *Browser) read(ctx context.Context, pageURL, expression string, render bool) (json.RawMessage, error) {
 	u, err := url.Parse(pageURL)
 	if err != nil || u.Scheme != "https" || u.Host != "www.linkedin.com" || u.User != nil {
 		return nil, errors.New("unexpected upstream URL")
@@ -184,7 +194,11 @@ func (b *Browser) Read(ctx context.Context, pageURL, expression string) (json.Ra
 	default:
 		return nil, ErrBusy
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	timeout := 20 * time.Second
+	if render {
+		timeout = 24 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	c, err := b.acquire(ctx)
 	if err != nil {
@@ -214,6 +228,11 @@ func (b *Browser) Read(ctx context.Context, pageURL, expression string) (json.Ra
 	}
 	if attached.SessionID == "" {
 		return nil, errors.New("Chrome returned no session ID")
+	}
+	if render {
+		if err := c.call(ctx, attached.SessionID, "Emulation.setFocusEmulationEnabled", map[string]bool{"enabled": true}, nil); err != nil {
+			return nil, err
+		}
 	}
 	var nav struct{ ErrorText string }
 	if err := c.call(ctx, attached.SessionID, "Page.navigate", map[string]string{"url": pageURL}, &nav); err != nil {

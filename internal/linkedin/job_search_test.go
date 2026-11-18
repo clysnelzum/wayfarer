@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -187,6 +188,60 @@ func TestJobSearchRejectsMissingRequestedFilter(t *testing.T) {
 	_, err := c.Jobs(context.Background(), JobQuery{Keywords: "DevOps", Page: 1, Filters: JobFilters{EasyApply: true}})
 	if !errors.Is(err, ErrSearchMismatch) {
 		t.Fatalf("expected upstream search mismatch, got %v", err)
+	}
+}
+
+func TestJobRecommendationsLimit(t *testing.T) {
+	items := make([]JobSummary, 26)
+	for i := range items {
+		items[i].ID = strconv.Itoa(i + 1)
+	}
+	for _, tc := range []struct {
+		limit   int
+		status  string
+		wantErr bool
+	}{
+		{26, "limit_reached", false},
+		{30, "no_more_observed", false},
+		{30, "budget_reached", false},
+		{30, "limit_reached", true},
+		{30, "", true},
+		{25, "limit_reached", true},
+	} {
+		c := Client{Reader: readerFunc(func(_ context.Context, raw, expression string) (json.RawMessage, error) {
+			if raw != base+"/jobs/" || !strings.HasSuffix(expression, ", "+strconv.Itoa(tc.limit)+`, "")`) {
+				t.Fatalf("expected the limit only in the browser extractor, not in the navigation URL")
+			}
+			return json.Marshal(JobResults{Items: items, RecommendationStatus: tc.status})
+		})}
+		v, err := c.Jobs(context.Background(), JobQuery{RecommendationLimit: tc.limit})
+		if (err != nil) != tc.wantErr || !tc.wantErr && v.RecommendationStatus != tc.status {
+			t.Fatalf("limit=%d status=%q: got %q (%v)", tc.limit, tc.status, v.RecommendationStatus, err)
+		}
+	}
+}
+
+func TestMultipleJobSearchLocations(t *testing.T) {
+	q := JobQuery{Keywords: "DevOps", Page: 1, Filters: JobFilters{LocationIDs: []string{"90009872", "101220015"}}}
+	path, err := q.searchPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(path)
+	if err != nil || u.Query().Get("geoId") != "90009872,101220015" {
+		t.Fatalf("unexpected location encoding: %s (%v)", path, err)
+	}
+	observed := url.Values{"keywords": {"DevOps"}, "geoId": {"101220015,90009872"}}
+	if err := validateObservedSearch(path, observed); err != nil {
+		t.Fatal(err)
+	}
+	observed.Set("geoId", "90009872")
+	if err := validateObservedSearch(path, observed); !errors.Is(err, ErrSearchMismatch) {
+		t.Fatalf("expected a dropped location error, got %v", err)
+	}
+	q.Filters.LocationID = "90009872"
+	if err := q.Validate(); err == nil {
+		t.Fatal("expected geo_id and geo_ids to be mutually exclusive")
 	}
 }
 
