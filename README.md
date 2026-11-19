@@ -4,7 +4,7 @@ Wayfarer is a local, read-only Go proxy for information visible in an authentica
 
 ## Run
 
-Requires Go 1.22+ and a Chrome instance with an active LinkedIn session and local remote debugging enabled. Wayfarer connects directly to Chrome over CDP; it does not need the Chrome DevTools MCP server at runtime.
+Requires Go 1.24+ and a Chrome instance with an active LinkedIn session and local remote debugging enabled. Wayfarer connects directly to Chrome over CDP; it does not need the Chrome DevTools MCP server at runtime.
 
 1. In Chrome 144+, enable **Remote debugging** at `chrome://inspect/#remote-debugging`. Use the browser-level WebSocket URL for that instance and approve the connection in Chrome if prompted.
 2. Set `WAYFARER_API_TOKEN` to a random secret of at least 32 characters. This is a **Wayfarer** token, not a LinkedIn token.
@@ -30,7 +30,7 @@ go run ./cmd/wayfarer
 
 Chrome may require approval for a new debugger connection to its default profile. Approval granted to another tool, such as Chrome DevTools MCP, does not automatically grant Wayfarer access. A running Wayfarer instance shares one persistent debugger WebSocket across requests, including concurrent requests. It opens a separate temporary tab per request and does not reconnect when a request is canceled. After a transport failure, the next request may reconnect. Restarting Wayfarer or Chrome may require approval again. For unattended use, start a separate Chrome instance with a dedicated, non-default `--user-data-dir` and a loopback `--remote-debugging-port`, then sign in to LinkedIn there. Do not copy cookies or expose the debugger outside the local machine.
 
-The API listens on `127.0.0.1:8765` by default. Use `-listen` to choose another loopback address or port. All routes require `Authorization: Bearer <WAYFARER_API_TOKEN>`. For example:
+The API listens on `127.0.0.1:8765` by default. Use `-listen` to choose another loopback address or port. To override the embedded LinkedIn JavaScript extractors (`internal/linkedin/scripts/*.js`) on disk without recompiling Go, pass `-scripts-dir <dir>` or set `WAYFARER_SCRIPTS_DIR` (matching `.js` files replace the embedded versions at startup; missing files fall back to the embedded defaults). All routes require `Authorization: Bearer <WAYFARER_API_TOKEN>`. For example:
 
 ```powershell
 Invoke-RestMethod 'http://127.0.0.1:8765/v1/jobs?q=DevOps' `
@@ -111,7 +111,7 @@ This is not a complete LinkedIn API. Personal profiles map the rendered profile 
 - `cmd/wayfarer/`: server setup
 - `internal/api/`: versioned routes and response handling
 - `internal/chrome/`: minimal CDP transport and temporary-tab lifecycle
-- `internal/linkedin/`: LinkedIn page adapters and typed response models
+- `internal/linkedin/`: LinkedIn page adapters, typed response models, and embedded browser scripts (`internal/linkedin/scripts/*.js`)
 - [`docs/upstream.md`](docs/upstream.md): observed upstream data sources and remaining research
 
-Run unit tests with `go test ./...` when Go is available. Run all dependency-free extractor fixture suites with `node --test tests/*.test.cjs` (covering `tests/jobs-extractors.test.cjs`, `tests/job-company-records.test.cjs`, `tests/job-description.test.cjs`, `tests/job-detail.test.cjs`, `tests/company-extractor.test.cjs`, and `tests/profile-extractor.test.cjs`).
+Run unit tests with `go test ./...` when Go is available. Run all dependency-free extractor fixture suites with `node --test tests/*.test.cjs` (covering `tests/jobs-extractors.test.cjs`, `tests/job-company-records.test.cjs`, `tests/job-description.test.cjs`, `tests/job-detail.test.cjs`, `tests/job-locations.test.cjs`, `tests/feed-extractor.test.cjs`, `tests/company-extractor.test.cjs`, and `tests/profile-extractor.test.cjs`).
