@@ -11,6 +11,7 @@ import (
 
 	"github.com/clysnelzum/wayfarer/internal/chrome"
 	"github.com/clysnelzum/wayfarer/internal/linkedin"
+	"github.com/clysnelzum/wayfarer/internal/linkedin/scripts"
 )
 
 // TestLiveJobsHTTP uses the production handler and reader on a loopback HTTP
@@ -19,13 +20,17 @@ func TestLiveJobsHTTP(t *testing.T) {
 	if os.Getenv("WAYFARER_LIVE_JOBS") != "1" {
 		t.Skip("set WAYFARER_LIVE_JOBS=1 and WAYFARER_CHROME_WS to run the live HTTP check")
 	}
-	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"))
+	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"), chrome.WithAuthGuard(scripts.DefaultRegistry().AuthGuard()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer browser.Close()
+	svc, err := linkedin.NewClient(browser)
+	if err != nil {
+		t.Fatal(err)
+	}
 	const token = "wayfarer-http-smoke-test-loopback-only"
-	server := httptest.NewServer(New(token, linkedin.Client{Reader: browser}))
+	server := httptest.NewServer(New(token, svc))
 	defer server.Close()
 	client := server.Client()
 	client.Timeout = 29 * time.Second

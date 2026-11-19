@@ -21,15 +21,15 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 		payload string
 		mode    string
 	}{
-		{"last page", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer"}],"page":2,"match_mode":"results","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"has_more":false`, ""},
-		{"search alert off", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer"}],"page":2,"match_mode":"results","alert_enabled":false,"query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"alert_enabled":false`, ""},
+		{"last page", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer","company":"Example","location":"Remote","url":"https://www.linkedin.com/jobs/view/101/"}],"page":2,"match_mode":"results","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"has_more":false`, ""},
+		{"search alert off", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer","company":"Example","location":"Remote","url":"https://www.linkedin.com/jobs/view/101/"}],"page":2,"match_mode":"results","alert_enabled":false,"query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"alert_enabled":false`, ""},
 		{"past last page", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","result_count":25,"result_count_qualifier":"exact","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"out_of_range":true`, ""},
 		{"dropped filter", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","query_evidence":{"keywords":["DevOps"],"start":["25"]}}}`, 502, `"code":"upstream_search_changed"`, ""},
 		{"auth required", `{"state":"auth"}`, 503, `"code":"upstream_auth_required"`, ""},
 		{"no debugger", ``, 503, `"code":"upstream_debugger_unavailable"`, ""},
-		{"expanded recommendations", `{"state":"ok","value":{"items":[{"id":"133","title":"Designer"}],"page":0,"recommendation_status":"budget_reached","sections":[{"title":"More jobs","job_ids":["133"]}]}}`, 200, `"recommendation_status":"budget_reached"`, "expanded"},
+		{"expanded recommendations", `{"state":"ok","value":{"items":[{"id":"133","title":"Designer","company":"Example","location":"Remote","url":"https://www.linkedin.com/jobs/view/133/"}],"page":0,"recommendation_status":"budget_reached","sections":[{"title":"More jobs","job_ids":["133"]}]}}`, 200, `"recommendation_status":"budget_reached"`, "expanded"},
 		{"unavailable job detail", `{"state":"ok","value":{"not_found":true}}`, 404, `"code":"job_not_found"`, "detail"},
-		{"job detail alert disabled", `{"state":"ok","value":{"job":{"id":"42","title":"Developer","company":"Example","description":"Build software.","similar_job_alert_enabled":false,"compensation_label":"180K USD/yr - 225K USD/yr"}}}`, 200, `"similar_job_alert_enabled":false`, "detail"},
+		{"job detail alert disabled", `{"state":"ok","value":{"job":{"id":"42","title":"Developer","company":"Example","url":"https://www.linkedin.com/jobs/view/42/","description":"Build software.","similar_job_alert_enabled":false,"compensation_label":"180K USD/yr - 225K USD/yr"}}}`, 200, `"similar_job_alert_enabled":false`, "detail"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := "/v1/jobs?q=DevOps&page=2&under_10_applicants=true"
@@ -109,10 +109,14 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer browser.Close()
+			client, err := linkedin.NewClient(browser)
+			if err != nil {
+				t.Fatal(err)
+			}
 			req := httptest.NewRequest(http.MethodGet, path, nil)
 			req.Header.Set("Authorization", "Bearer local")
 			w := httptest.NewRecorder()
-			New("local", linkedin.Client{Reader: browser}).ServeHTTP(w, req)
+			New("local", client).ServeHTTP(w, req)
 			if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.payload) || strings.Contains(w.Body.String(), "query_evidence") {
 				t.Fatalf("unexpected HTTP response %d: %s", w.Code, w.Body)
 			}

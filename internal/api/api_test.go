@@ -1,34 +1,57 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
+	"math"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
-	"github.com/clysnelzum/wayfarer/internal/chrome"
 	"github.com/clysnelzum/wayfarer/internal/linkedin"
 )
 
 type stub struct {
 	query         linkedin.JobQuery
-	feedQuery     linkedin.FeedQuery
+	feedLimit     int
 	locationQuery string
 	companyQuery  string
 	err           error
+	panicVal      any
 	calls         int
 }
 
 func (s *stub) Jobs(_ context.Context, q linkedin.JobQuery) (linkedin.JobResults, error) {
 	s.calls++
+	if s.panicVal != nil {
+		panic(s.panicVal)
+	}
 	s.query = q
-	return linkedin.JobResults{Items: []linkedin.JobSummary{{ID: "42", Title: "DevOps"}}}, s.err
+	return linkedin.JobResults{Items: []linkedin.JobSummary{{
+		ID:       "42",
+		Title:    "DevOps",
+		Company:  "Example Co",
+		Location: "Remote",
+		URL:      "https://www.linkedin.com/jobs/view/42/",
+	}}}, s.err
 }
 
 func (s *stub) Job(_ context.Context, id string) (linkedin.Job, error) {
 	s.calls++
-	return linkedin.Job{ID: id, Description: "Cloud"}, s.err
+	if s.panicVal != nil {
+		panic(s.panicVal)
+	}
+	return linkedin.Job{
+		ID:          id,
+		Title:       "DevOps",
+		Company:     "Example Co",
+		URL:         "https://www.linkedin.com/jobs/view/" + id + "/",
+		Description: "Cloud",
+	}, s.err
 }
 
 func (s *stub) JobLocations(_ context.Context, q string) (linkedin.JobLocations, error) {
@@ -43,20 +66,23 @@ func (s *stub) JobCompanies(_ context.Context, q string) (linkedin.JobCompanies,
 	return linkedin.JobCompanies{Items: []linkedin.JobCompany{{ID: "1035", Name: "Microsoft"}}, Status: "suggestions"}, s.err
 }
 
-func (s *stub) Feed(_ context.Context, q linkedin.FeedQuery) (linkedin.FeedResults, error) {
+func (s *stub) Feed(_ context.Context, limit int) (linkedin.FeedResults, error) {
 	s.calls++
-	s.feedQuery = q
+	if s.panicVal != nil {
+		panic(s.panicVal)
+	}
+	s.feedLimit = limit
 	return linkedin.FeedResults{Items: []linkedin.Post{{ID: "example1", Text: "Post", Content: "Post"}}, LoadStatus: "initial"}, s.err
 }
 
 func (s *stub) Profile(_ context.Context, slug string) (linkedin.Profile, error) {
 	s.calls++
-	return linkedin.Profile{Slug: slug, Name: "Example Person"}, s.err
+	return linkedin.Profile{Slug: slug, URL: "https://www.linkedin.com/in/" + slug + "/", Name: "Example Person"}, s.err
 }
 
 func (s *stub) Company(_ context.Context, slug string) (linkedin.Company, error) {
 	s.calls++
-	return linkedin.Company{Slug: slug, Name: "Example Company"}, s.err
+	return linkedin.Company{Slug: slug, URL: "https://www.linkedin.com/company/" + slug + "/", Name: "Example Company"}, s.err
 }
 
 func TestRoutes(t *testing.T) {
@@ -66,6 +92,10 @@ func TestRoutes(t *testing.T) {
 		status, calls                  int
 	}{
 		{"health", "GET", "/healthz", "Bearer local", "", nil, 200, 0},
+		{"health with query", "GET", "/healthz?x=1", "Bearer local", "invalid_query", nil, 400, 0},
+		{"unauthenticated health", "GET", "/healthz", "", "unauthorized", nil, 401, 0},
+		{"unauthenticated post unknown", "POST", "/unknown", "", "unauthorized", nil, 401, 0},
+		{"unknown route", "GET", "/v1/unknown", "Bearer local", "not_found", nil, 404, 0},
 		{"recommendations", "GET", "/v1/jobs", "Bearer local", "", nil, 200, 1},
 		{"preferences source page two", "GET", "/v1/jobs?source=preferences&page=2", "Bearer local", "", nil, 200, 1},
 		{"unavailable source", "GET", "/v1/jobs?source=profile_match", "Bearer local", "recommendation_source_unavailable", linkedin.ErrJobSourceUnavailable, 404, 1},
@@ -109,9 +139,13 @@ func TestRoutes(t *testing.T) {
 		{"page too high", "GET", "/v1/jobs?q=Go&page=101", "Bearer local", "invalid_query", nil, 400, 0},
 		{"repeated page", "GET", "/v1/jobs?q=Go&page=1&page=2", "Bearer local", "invalid_query", nil, 400, 0},
 		{"detail", "GET", "/v1/jobs/42", "Bearer local", "", nil, 200, 1},
+		{"detail with query", "GET", "/v1/jobs/42?x=1", "Bearer local", "invalid_query", nil, 400, 0},
 		{"personal profile", "GET", "/v1/profiles/example-person", "Bearer local", "", nil, 200, 1},
+		{"profile with query", "GET", "/v1/profiles/example-person?x=1", "Bearer local", "invalid_query", nil, 400, 0},
 		{"company profile", "GET", "/v1/companies/example-co", "Bearer local", "", nil, 200, 1},
+		{"company with query", "GET", "/v1/companies/example-co?x=1", "Bearer local", "invalid_query", nil, 400, 0},
 		{"invalid profile path", "GET", "/v1/profiles/example/extra", "Bearer local", "invalid_slug", nil, 400, 0},
+		{"invalid company path", "GET", "/v1/companies/acme/extra", "Bearer local", "invalid_slug", nil, 400, 0},
 		{"invalid company slug", "GET", "/v1/companies/-example", "Bearer local", "invalid_slug", nil, 400, 0},
 		{"personal profile unavailable", "GET", "/v1/profiles/example-person", "Bearer local", "profile_not_found", linkedin.ErrProfileNotFound, 404, 1},
 		{"company unavailable", "GET", "/v1/companies/example-co", "Bearer local", "company_not_found", linkedin.ErrCompanyNotFound, 404, 1},
@@ -125,7 +159,12 @@ func TestRoutes(t *testing.T) {
 		{"repeated q", "GET", "/v1/jobs?q=a&q=b", "Bearer local", "invalid_query", nil, 400, 0},
 		{"unknown query", "GET", "/v1/jobs?url=abc", "Bearer local", "invalid_query", nil, 400, 0},
 		{"missing job", "GET", "/v1/jobs/42", "Bearer local", "job_not_found", linkedin.ErrNotFound, 404, 1},
-		{"expired session", "GET", "/v1/feed", "Bearer local", "upstream_auth_required", chrome.ErrAuth, 503, 1},
+		{"missing job sentinel", "GET", "/v1/jobs/42", "Bearer local", "job_not_found", linkedin.ErrJobNotFound, 404, 1},
+		{"expired session", "GET", "/v1/feed", "Bearer local", "upstream_auth_required", linkedin.ErrAuthRequired, 503, 1},
+		{"upstream busy", "GET", "/v1/feed", "Bearer local", "upstream_busy", linkedin.ErrUpstreamBusy, 503, 1},
+		{"debugger unavailable", "GET", "/v1/feed", "Bearer local", "upstream_debugger_unavailable", linkedin.ErrDebuggerUnavailable, 503, 1},
+		{"invalid input", "GET", "/v1/feed", "Bearer local", "invalid_query", linkedin.ErrInvalidInput, 400, 1},
+		{"upstream contract", "GET", "/v1/feed", "Bearer local", "upstream_error", linkedin.ErrUpstreamContract, 502, 1},
 		{"timed out", "GET", "/v1/feed", "Bearer local", "upstream_timeout", context.DeadlineExceeded, 504, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -134,8 +173,19 @@ func TestRoutes(t *testing.T) {
 			r.Header.Set("Authorization", tc.auth)
 			w := httptest.NewRecorder()
 			New("local", s).ServeHTTP(w, r)
-			if w.Code != tc.status || s.calls != tc.calls || w.Header().Get("Cache-Control") != "no-store" {
+			if w.Code != tc.status || s.calls != tc.calls ||
+				w.Header().Get("Cache-Control") != "no-store" ||
+				w.Header().Get("X-Content-Type-Options") != "nosniff" {
 				t.Fatalf("got %d, %d calls, headers %v (%s)", w.Code, s.calls, w.Header(), w.Body)
+			}
+			if tc.code == "upstream_busy" && w.Header().Get("Retry-After") != "2" {
+				t.Fatalf("expected Retry-After: 2, got %q", w.Header().Get("Retry-After"))
+			}
+			if tc.code == "method_not_allowed" && w.Header().Get("Allow") != "GET" {
+				t.Fatalf("expected Allow: GET, got %q", w.Header().Get("Allow"))
+			}
+			if tc.code == "unauthorized" && w.Header().Get("WWW-Authenticate") != "Bearer" {
+				t.Fatalf("expected WWW-Authenticate: Bearer, got %q", w.Header().Get("WWW-Authenticate"))
 			}
 			if tc.code != "" {
 				var body struct{ Error struct{ Code string } }
@@ -183,12 +233,73 @@ func TestRoutes(t *testing.T) {
 					t.Fatalf("got location query %q", s.locationQuery)
 				}
 			}
-			if tc.name == "feed with limit" && s.feedQuery.Limit != 8 {
-				t.Fatalf("got feed query %+v", s.feedQuery)
+			if tc.name == "feed with limit" && s.feedLimit != 8 {
+				t.Fatalf("got feed limit %d", s.feedLimit)
 			}
 			if !reflect.DeepEqual(s.query, want) {
 				t.Fatalf("got query %+v, want %+v", s.query, want)
 			}
 		})
+	}
+}
+
+func TestNewHandlerValidation(t *testing.T) {
+	if _, err := NewHandler("", &stub{}); err == nil {
+		t.Fatal("expected error for empty token")
+	}
+	if _, err := NewHandler("local", nil); err == nil {
+		t.Fatal("expected error for nil service")
+	}
+}
+
+func TestRecoverPanicAndLoggingRedaction(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	h, err := NewHandler("super-secret-token-value", &stub{panicVal: "boom"}, WithLogger(logger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/jobs?q=secret-query-term", nil)
+	req.Header.Set("Authorization", "Bearer super-secret-token-value")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on panic, got %d: %s", w.Code, w.Body)
+	}
+	if w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("missing security headers on panic response: %v", w.Header())
+	}
+	var body errorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Error.Code != "internal_error" {
+		t.Fatalf("unexpected panic body: %s", w.Body)
+	}
+
+	logged := logs.String()
+	if strings.Contains(logged, "super-secret-token-value") {
+		t.Fatalf("logs leaked Authorization token: %s", logged)
+	}
+	if strings.Contains(logged, "secret-query-term") {
+		t.Fatalf("logs leaked query parameter: %s", logged)
+	}
+	if !strings.Contains(logged, `"path":"/v1/jobs"`) || !strings.Contains(logged, `"status":500`) {
+		t.Fatalf("expected structured request log with path and status, got: %s", logged)
+	}
+}
+
+func TestWriteJSONMarshalFailure(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	w := httptest.NewRecorder()
+
+	writeJSON(w, logger, http.StatusOK, map[string]any{"bad": math.NaN()})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on marshal failure, got %d", w.Code)
+	}
+	var body errorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Error.Code != "internal_error" {
+		t.Fatalf("unexpected marshal error body: %s", w.Body)
 	}
 }

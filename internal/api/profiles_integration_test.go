@@ -219,11 +219,15 @@ func TestProfilesAndCompaniesHTTPThroughCDP(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer browser.Close()
+			client, err := linkedin.NewClient(browser)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			req := httptest.NewRequest(http.MethodGet, tc.apiPath, nil)
 			req.Header.Set("Authorization", "Bearer local")
 			w := httptest.NewRecorder()
-			New("local", linkedin.Client{Reader: browser}).ServeHTTP(w, req)
+			New("local", client).ServeHTTP(w, req)
 
 			if w.Code != tc.status {
 				t.Fatalf("unexpected HTTP status %d (want %d): %s", w.Code, tc.status, w.Body)
