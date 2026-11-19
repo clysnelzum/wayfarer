@@ -10,11 +10,20 @@ Requires Go 1.22+ and a Chrome instance with an active LinkedIn session and loca
 2. Set `WAYFARER_API_TOKEN` to a random secret of at least 32 characters. This is a **Wayfarer** token, not a LinkedIn token.
 3. Set `WAYFARER_CHROME_WS` to the browser-level loopback WebSocket URL, then run `go run ./cmd/wayfarer`.
 
-For regular Chrome on Windows, the browser-level URL can be assembled from `DevToolsActivePort` in the Chrome user data directory. If Chrome uses a custom data directory, adjust this example to point at it:
+For regular Chrome on Windows or Linux, the browser-level URL can be assembled from `DevToolsActivePort` in the Chrome user data directory. If Chrome uses a custom data directory, adjust these examples to point at it:
 
 ```powershell
+# Windows (PowerShell)
 $port, $path = Get-Content "$env:LOCALAPPDATA\Google\Chrome\User Data\DevToolsActivePort" -TotalCount 2
 $env:WAYFARER_CHROME_WS = "ws://127.0.0.1:${port}${path}"
+# Set WAYFARER_API_TOKEN separately, then:
+go run ./cmd/wayfarer
+```
+
+```bash
+# Linux (bash)
+mapfile -t dp < ~/.config/google-chrome/DevToolsActivePort
+export WAYFARER_CHROME_WS="ws://127.0.0.1:${dp[0]}${dp[1]}"
 # Set WAYFARER_API_TOKEN separately, then:
 go run ./cmd/wayfarer
 ```
@@ -81,6 +90,18 @@ Job detail includes `description` as plain text. When the description's structur
 
 In detail responses, `application_activity.kind` distinguishes clicks on an external Apply button from applications. `application_activity.qualifier` preserves whether the number is exact or a lower bound. `viewer_application` reports only the signed-in account's explicitly shown status. Publication and submission labels are relative text, not fabricated timestamps. A listing that shows its description but no longer accepts applications can still return `200` with `application_status: "closed"`. An explicit invalid-or-deleted listing page returns `404 job_not_found`; a generic loading error does not. Detail also includes `compensation_label` when a recognizable salary chip is displayed, and `similar_job_alert_enabled` when the alert switch is shown. A missing switch is not reported as `false`, and the endpoint never toggles it.
 
+### Personal and company profiles
+
+`GET /v1/profiles/{slug}` opens `/in/{slug}/` in a temporary background tab using `ReadRendered` (CDP focus emulation plus a `1280×900` viewport override) so LinkedIn hydrates scroll-triggered lazy SDUI sections without bringing Chrome to the foreground. The profile extractor scrolls `main#workspace` and ancestor scrollers in bounded steps, handles React hydration root replacement and scroll resets while core sections mount, and omits sections that are absent or not visible. `GET /v1/companies/{slug}` reads `/company/{slug}/about/` in a standard temporary tab, extracting the top card, Overview `<dl>` details, workplace policy, commitments, locations (with embedded `bpr-guid-*` payload fallbacks for `groupedLocations` and normalized `followerCount` states), and sidebar affiliated/similar pages.
+
+Standard tab reads use a `25s` timeout; rendered reads (`GET /v1/profiles/{slug}`, `GET /v1/jobs?limit=…`, and `profile_match` source resolution) use a `90s` CDP timeout (with up to `75s` of extractor hydration polling on profiles), and the HTTP server uses a `95s` write timeout so rendered reads and tab cleanup can finish. Explicit unavailable profile or company pages return `404` (`profile_not_found` or `company_not_found`).
+
+With `WAYFARER_CHROME_WS` pointing to an authenticated Chrome session, opt-in live verification for both endpoints runs via:
+
+```bash
+WAYFARER_LIVE_PROFILES=1 go test ./internal/api ./internal/linkedin -run '^TestLiveProfilesAndCompanies' -count=1
+```
+
 Responses are JSON and are not cached. Errors use `{"error":{"code":"…","message":"…"}}`. An unreachable or unapproved Chrome debugger returns `503 upstream_debugger_unavailable`; an expired or challenged LinkedIn session returns `503 upstream_auth_required` when detected. An expected page that does not render in time returns `504`. The proxy exposes no write endpoints and does not click Apply, Save, Like, or Post. Normal page views may still be recorded by LinkedIn.
 
 ## Scope
@@ -93,4 +114,4 @@ This is not a complete LinkedIn API. Personal profiles map the rendered profile 
 - `internal/linkedin/`: LinkedIn page adapters and typed response models
 - [`docs/upstream.md`](docs/upstream.md): observed upstream data sources and remaining research
 
-Run unit tests with `go test ./...` when Go is available. Run the dependency-free extractor fixtures with `node --test tests/jobs-extractors.test.cjs tests/job-company-records.test.cjs tests/company-extractor.test.cjs tests/profile-extractor.test.cjs` (or `node --test tests/*.test.cjs`).
+Run unit tests with `go test ./...` when Go is available. Run all dependency-free extractor fixture suites with `node --test tests/*.test.cjs` (covering `tests/jobs-extractors.test.cjs`, `tests/job-company-records.test.cjs`, `tests/job-description.test.cjs`, `tests/job-detail.test.cjs`, `tests/company-extractor.test.cjs`, and `tests/profile-extractor.test.cjs`).
