@@ -2,6 +2,7 @@ package linkedin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strconv"
@@ -10,42 +11,46 @@ import (
 	"unicode/utf8"
 )
 
-var ErrJobSourceUnavailable = errors.New("recommendation source was not offered by LinkedIn")
-
 var recommendationOrigins = map[string]string{
 	"preferences":   "PREFERENCES_LANDING",
 	"profile_match": "QUALIFICATION_LANDING",
 }
 
-// JobSourceContext holds the native parameters for one observed Show all link.
-// It is never sent in cleartext in an API response or accepted from a caller.
-type JobSourceContext struct {
-	Source, Origin, Keywords, Locations, Seed string
+// jobSourceContext holds the native parameters for one observed Show all link.
+// It is encoded as an opaque string in JobSection/JobSearchInfo/JobQuery with json:"-".
+type jobSourceContext struct {
+	Source    string `json:"source"`
+	Origin    string `json:"origin"`
+	Keywords  string `json:"keywords"`
+	Locations string `json:"locations"`
+	Seed      string `json:"seed"`
 }
 
-func (c Client) resolveJobSource(ctx context.Context, source string) (JobSourceContext, error) {
-	inv, err := c.scripts().Jobs(0, source)
-	if err != nil {
-		return JobSourceContext{}, err
-	}
-	reader := c.Reader
-	if source == "profile_match" {
-		reader = renderReader(reader)
-	}
-	link, err := read[struct {
-		JobSourceContext
-		Unavailable bool
-	}](ctx, reader, "/jobs/", inv.Expression)
-	if err != nil {
-		return JobSourceContext{}, err
-	}
-	if link.Unavailable {
-		return JobSourceContext{}, ErrJobSourceUnavailable
-	}
-	return link.JobSourceContext, nil
+type wireJobSourceResolution struct {
+	jobSourceContext
+	Unavailable bool `json:"unavailable"`
 }
 
-func (link JobSourceContext) validFor(source string) bool {
+func (c *Client) resolveJobSource(ctx context.Context, source string) (jobSourceContext, error) {
+	inv, err := c.scripts.Jobs(0, source)
+	if err != nil {
+		return jobSourceContext{}, err
+	}
+	rendered := source == "profile_match"
+	wire, err := readWire[wireJobSourceResolution](ctx, c, rendered, "resolve_job_source", "/jobs/", inv.Expression)
+	if err != nil {
+		return jobSourceContext{}, err
+	}
+	if wire.Unavailable {
+		return jobSourceContext{}, ErrJobSourceUnavailable
+	}
+	if !wire.jobSourceContext.validFor(source) {
+		return jobSourceContext{}, contractError("resolve_job_source", "invalid recommendation source context", nil)
+	}
+	return wire.jobSourceContext, nil
+}
+
+func (link jobSourceContext) validFor(source string) bool {
 	origin, known := recommendationOrigins[source]
 	if !known || link.Source != source || strings.TrimPrefix(link.Origin, "JobSearchOrigin_") != origin ||
 		!utf8.ValidString(link.Keywords) || strings.TrimSpace(link.Keywords) == "" || len(link.Keywords) > 1000 ||
@@ -57,8 +62,28 @@ func (link JobSourceContext) validFor(source string) bool {
 	return true
 }
 
-func (link JobSourceContext) searchPath(page int) string {
-	args := url.Values{"keywords": {link.Keywords}, "origin": {link.Origin}, "geoId": {link.Locations}}
+func (link jobSourceContext) encode() (string, error) {
+	raw, err := json.Marshal(link)
+	if err != nil {
+		return "", contractError("job_source_context", "encode source context", err)
+	}
+	return string(raw), nil
+}
+
+func decodeSourceContext(raw, source string) (jobSourceContext, error) {
+	var link jobSourceContext
+	if err := json.Unmarshal([]byte(raw), &link); err != nil || !link.validFor(source) {
+		return jobSourceContext{}, errors.New("invalid recommendation source context")
+	}
+	return link, nil
+}
+
+func (link jobSourceContext) searchPath(page int) string {
+	args := url.Values{
+		"keywords": {link.Keywords},
+		"origin":   {link.Origin},
+		"geoId":    {link.Locations},
+	}
 	if page == 1 {
 		args.Set("originToLandingJobPostings", link.Seed)
 	} else {

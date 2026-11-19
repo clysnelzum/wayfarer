@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/clysnelzum/wayfarer/internal/chrome"
+	"github.com/clysnelzum/wayfarer/internal/linkedin/scripts"
 )
 
 // TestLiveProfilesAndCompanies is opt-in: it navigates temporary tabs in an
@@ -15,12 +16,15 @@ func TestLiveProfilesAndCompanies(t *testing.T) {
 	if os.Getenv("WAYFARER_LIVE_PROFILES") != "1" && os.Getenv("WAYFARER_LIVE_JOBS") != "1" {
 		t.Skip("set WAYFARER_LIVE_PROFILES=1 (or WAYFARER_LIVE_JOBS=1) and WAYFARER_CHROME_WS to run the live profiles check")
 	}
-	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"))
+	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"), chrome.WithAuthGuard(scripts.DefaultRegistry().AuthGuard()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer browser.Close()
-	c := Client{Reader: browser}
+	c, err := NewClient(browser)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, slug := range []string{"microsoft", "mercadolibre"} {
 		t.Run("company/"+slug, func(t *testing.T) {

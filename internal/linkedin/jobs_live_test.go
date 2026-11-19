@@ -9,16 +9,27 @@ import (
 	"time"
 
 	"github.com/clysnelzum/wayfarer/internal/chrome"
+	"github.com/clysnelzum/wayfarer/internal/linkedin/scripts"
 )
 
 // liveJobsAudit independently reads card IDs from the same DOM snapshot as the
 // extractor so personalized ordering is not compared across two navigations.
 type liveJobsAudit struct {
-	reader Reader
+	reader chrome.PageReader
 	native []string
 }
 
+var _ chrome.RenderedPageReader = (*liveJobsAudit)(nil)
+
 func (a *liveJobsAudit) Read(ctx context.Context, pageURL, expression string) (json.RawMessage, error) {
+	return a.eval(ctx, false, pageURL, expression)
+}
+
+func (a *liveJobsAudit) ReadRendered(ctx context.Context, pageURL, expression string) (json.RawMessage, error) {
+	return a.eval(ctx, true, pageURL, expression)
+}
+
+func (a *liveJobsAudit) eval(ctx context.Context, rendered bool, pageURL, expression string) (json.RawMessage, error) {
 	probe := `async () => {
 		const result = await (` + expression + `)();
 		if (result === null) return null;
@@ -26,7 +37,19 @@ func (a *liveJobsAudit) Read(ctx context.Context, pageURL, expression string) (j
 		const ids = nodes.filter(n => n.getClientRects().length).map(n => n.getAttribute('componentkey').split('-').at(-1)).filter(id => /^\d+$/.test(id));
 		return {result, native: [...new Set(ids)].slice(0, 25)};
 	}`
-	raw, err := a.reader.Read(ctx, pageURL, probe)
+	var (
+		raw json.RawMessage
+		err error
+	)
+	if rendered {
+		if rp, ok := a.reader.(chrome.RenderedPageReader); ok {
+			raw, err = rp.ReadRendered(ctx, pageURL, probe)
+		} else {
+			raw, err = a.reader.Read(ctx, pageURL, probe)
+		}
+	} else {
+		raw, err = a.reader.Read(ctx, pageURL, probe)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -45,12 +68,15 @@ func TestLiveJobSuggestedFacet(t *testing.T) {
 	if os.Getenv("WAYFARER_LIVE_JOBS") != "1" {
 		t.Skip("set WAYFARER_LIVE_JOBS=1 and WAYFARER_CHROME_WS to run the live jobs check")
 	}
-	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"))
+	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"), chrome.WithAuthGuard(scripts.DefaultRegistry().AuthGuard()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer browser.Close()
-	c := Client{Reader: browser}
+	c, err := NewClient(browser)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	q := JobQuery{Keywords: "Product Designer", Page: 1}
@@ -78,12 +104,15 @@ func TestLiveJobCompanyLookup(t *testing.T) {
 	if os.Getenv("WAYFARER_LIVE_JOBS") != "1" {
 		t.Skip("set WAYFARER_LIVE_JOBS=1 and WAYFARER_CHROME_WS to run the live jobs check")
 	}
-	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"))
+	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"), chrome.WithAuthGuard(scripts.DefaultRegistry().AuthGuard()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer browser.Close()
-	c := Client{Reader: browser}
+	c, err := NewClient(browser)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	companies, err := c.JobCompanies(ctx, "Microsoft")
@@ -112,7 +141,7 @@ func TestLiveJobSearch(t *testing.T) {
 	if os.Getenv("WAYFARER_LIVE_JOBS") != "1" {
 		t.Skip("set WAYFARER_LIVE_JOBS=1 and WAYFARER_CHROME_WS to run the live jobs check")
 	}
-	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"))
+	browser, err := chrome.New(os.Getenv("WAYFARER_CHROME_WS"), chrome.WithAuthGuard(scripts.DefaultRegistry().AuthGuard()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +159,11 @@ func TestLiveJobSearch(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
 			audit := &liveJobsAudit{reader: browser}
-			result, err := (Client{Reader: audit}).Jobs(ctx, tc.q)
+			c, err := NewClient(audit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := c.Jobs(ctx, tc.q)
 			if err != nil {
 				t.Fatalf("browser search did not satisfy the Wayfarer contract: %v", err)
 			}

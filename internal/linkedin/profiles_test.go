@@ -9,41 +9,53 @@ import (
 
 func TestProfileAndCompanyAdapters(t *testing.T) {
 	responses := map[string]string{
-		base + "/in/example-person/":           `{"profile":{"slug":"example-person","name":"Example Person","headline":"Engineer","url":"ignored"}}`,
-		base + "/in/SatyaNadella/":             `{"profile":{"slug":"satyanadella","name":"Satya Nadella","url":"ignored"}}`,
-		base + "/in/satyanadella/":             `{"profile":{"slug":"ſatyanadella","name":"Bad"}}`,
-		base + "/company/example-co/about/":    `{"company":{"slug":"example-co","name":"Example Company","industry":"Technology","url":"ignored"}}`,
-		base + "/company/Microsoft/about/":     `{"company":{"slug":"microsoft","name":"Microsoft","url":"ignored"}}`,
-		base + "/in/missing/":                  `{"not_found":true}`,
-		base + "/company/missing/about/":       `{"not_found":true}`,
-		base + "/company/wrong-content/about/": `{"company":{"slug":"another-company","name":"Another Company"}}`,
+		defaultBaseURL + "/in/example-person/":           `{"profile":{"slug":"example-person","name":"Example Person","headline":"Engineer","url":"ignored"}}`,
+		defaultBaseURL + "/in/SatyaNadella/":             `{"profile":{"slug":"satyanadella","name":"Satya Nadella","url":"ignored"}}`,
+		defaultBaseURL + "/in/satyanadella/":             `{"profile":{"slug":"ſatyanadella","name":"Bad"}}`,
+		defaultBaseURL + "/company/example-co/about/":    `{"company":{"slug":"example-co","name":"Example Company","industry":"Technology","url":"ignored"}}`,
+		defaultBaseURL + "/company/Microsoft/about/":     `{"company":{"slug":"microsoft","name":"Microsoft","url":"ignored"}}`,
+		defaultBaseURL + "/in/missing/":                  `{"not_found":true}`,
+		defaultBaseURL + "/company/missing/about/":       `{"not_found":true}`,
+		defaultBaseURL + "/company/wrong-content/about/": `{"company":{"slug":"another-company","name":"Another Company"}}`,
 	}
-	c := Client{Reader: readerFunc(func(_ context.Context, pageURL, expression string) (json.RawMessage, error) {
-		body, ok := responses[pageURL]
-		if !ok || expression == "" {
-			t.Fatalf("unexpected upstream query %q", pageURL)
-		}
-		return json.RawMessage(body), nil
-	})}
+	mock := &renderedReaderMock{
+		readFn: func(_ context.Context, pageURL, expression string) (json.RawMessage, error) {
+			body, ok := responses[pageURL]
+			if !ok || expression == "" {
+				t.Fatalf("unexpected upstream query %q", pageURL)
+			}
+			return json.RawMessage(body), nil
+		},
+		readRenderedFn: func(_ context.Context, pageURL, expression string) (json.RawMessage, error) {
+			body, ok := responses[pageURL]
+			if !ok || expression == "" {
+				t.Fatalf("unexpected upstream rendered query %q", pageURL)
+			}
+			return json.RawMessage(body), nil
+		},
+	}
+	c := mustNewClient(t, mock)
 	ctx := context.Background()
 	p, err := c.Profile(ctx, "example-person")
-	if err != nil || p.URL != base+"/in/example-person/" || p.Headline != "Engineer" {
+	if err != nil || p.URL != defaultBaseURL+"/in/example-person/" || p.Headline != "Engineer" {
 		t.Fatalf("unexpected personal profile: %+v (%v)", p, err)
 	}
 	pCase, err := c.Profile(ctx, "SatyaNadella")
-	if err != nil || pCase.Slug != "satyanadella" || pCase.URL != base+"/in/satyanadella/" {
+	if err != nil || pCase.Slug != "satyanadella" || pCase.URL != defaultBaseURL+"/in/satyanadella/" {
 		t.Fatalf("unexpected canonical profile: %+v (%v)", pCase, err)
 	}
 	co, err := c.Company(ctx, "example-co")
-	if err != nil || co.URL != base+"/company/example-co/" || co.Industry != "Technology" {
+	if err != nil || co.URL != defaultBaseURL+"/company/example-co/" || co.Industry != "Technology" {
 		t.Fatalf("unexpected company profile: %+v (%v)", co, err)
 	}
 	coCase, err := c.Company(ctx, "Microsoft")
-	if err != nil || coCase.Slug != "microsoft" || coCase.URL != base+"/company/microsoft/" {
+	if err != nil || coCase.Slug != "microsoft" || coCase.URL != defaultBaseURL+"/company/microsoft/" {
 		t.Fatalf("unexpected canonical company: %+v (%v)", coCase, err)
 	}
 	if _, err := c.Profile(ctx, "satyanadella"); err == nil {
 		t.Fatal("expected invalid upstream slug to be rejected")
+	} else {
+		assertContractError(t, err)
 	}
 	if _, err := c.Profile(ctx, "missing"); !errors.Is(err, ErrProfileNotFound) {
 		t.Fatalf("expected missing profile error, got %v", err)
@@ -53,9 +65,17 @@ func TestProfileAndCompanyAdapters(t *testing.T) {
 	}
 	if _, err := c.Company(ctx, "wrong-content"); err == nil {
 		t.Fatal("expected a slug mismatch error")
+	} else {
+		assertContractError(t, err)
 	}
-	if _, err := c.Profile(ctx, "invalid/slug"); err == nil {
-		t.Fatal("expected an invalid slug error without contacting upstream")
+	if _, err := c.Profile(ctx, "invalid/slug"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for invalid profile slug, got %v", err)
+	}
+	if _, err := c.Company(ctx, "invalid/slug"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for invalid company slug, got %v", err)
+	}
+	if len(mock.renderedCalls) != 4 || len(mock.readCalls) != 4 {
+		t.Fatalf("expected 4 rendered (profiles) and 4 standard (companies) calls, got rendered=%d read=%d", len(mock.renderedCalls), len(mock.readCalls))
 	}
 }
 
@@ -94,37 +114,39 @@ func TestCompanyRichFieldsAndValidation(t *testing.T) {
 		"similar_pages":[{"slug":"google","url":"https://www.linkedin.com/company/google/","name":"Google","industry":"Software Development","followers_label":"35 M seguidores"}]
 	}}`
 	invalidPayloads := map[string]string{
-		"bad-id":         `{"company":{"slug":"bad-id","name":"Bad ID","id":"0123"}}`,
-		"bad-id-alpha":   `{"company":{"slug":"bad-id-alpha","name":"Bad Alpha","id":"abc"}}`,
-		"neg-members":    `{"company":{"slug":"neg-members","name":"Neg","associated_members_count":-1}}`,
-		"neg-followers":  `{"company":{"slug":"neg-followers","name":"Neg","followers_count":-5}}`,
-		"neg-locations":  `{"company":{"slug":"neg-locations","name":"Neg","locations_count":-2}}`,
-		"empty-wp-title": `{"company":{"slug":"empty-wp-title","name":"WP","workplace_policy":{"title":"  "}}}`,
-		"empty-commit":   `{"company":{"slug":"empty-commit","name":"Commit","commitments":[{"title":""}]}}`,
-		"empty-location": `{"company":{"slug":"empty-location","name":"Loc","locations":[{"is_headquarters":true}]}}`,
-		"bad-related":    `{"company":{"slug":"bad-related","name":"Rel","affiliated_pages":[{"slug":"../bad","url":"https://www.linkedin.com/company/bad/","name":"Bad"}]}}`,
+		"bad-id":          `{"company":{"slug":"bad-id","name":"Bad ID","id":"0123"}}`,
+		"bad-id-alpha":    `{"company":{"slug":"bad-id-alpha","name":"Bad Alpha","id":"abc"}}`,
+		"neg-members":     `{"company":{"slug":"neg-members","name":"Neg","associated_members_count":-1}}`,
+		"neg-followers":   `{"company":{"slug":"neg-followers","name":"Neg","followers_count":-5}}`,
+		"neg-locations":   `{"company":{"slug":"neg-locations","name":"Neg","locations_count":-2}}`,
+		"bad-website":     `{"company":{"slug":"bad-website","name":"Web","website":"/relative"}}`,
+		"empty-wp-title":  `{"company":{"slug":"empty-wp-title","name":"WP","workplace_policy":{"title":"  "}}}`,
+		"empty-commit":    `{"company":{"slug":"empty-commit","name":"Commit","commitments":[{"title":""}]}}`,
+		"empty-location":  `{"company":{"slug":"empty-location","name":"Loc","locations":[{"is_headquarters":true}]}}`,
+		"bad-related":     `{"company":{"slug":"bad-related","name":"Rel","affiliated_pages":[{"slug":"../bad","url":"https://www.linkedin.com/company/bad/","name":"Bad"}]}}`,
+		"bad-related-url": `{"company":{"slug":"bad-related-url","name":"Rel","similar_pages":[{"slug":"google","url":"not-a-url","name":"Google"}]}}`,
 	}
-	c := Client{Reader: readerFunc(func(_ context.Context, pageURL, expression string) (json.RawMessage, error) {
+	c := mustNewClient(t, readerFunc(func(_ context.Context, pageURL, expression string) (json.RawMessage, error) {
 		if expression == "" {
 			t.Fatal("expected non-empty expression")
 		}
-		if pageURL == base+"/company/microsoft/about/" {
+		if pageURL == defaultBaseURL+"/company/microsoft/about/" {
 			return json.RawMessage(richPayload), nil
 		}
 		for slug, body := range invalidPayloads {
-			if pageURL == base+"/company/"+slug+"/about/" {
+			if pageURL == defaultBaseURL+"/company/"+slug+"/about/" {
 				return json.RawMessage(body), nil
 			}
 		}
 		t.Fatalf("unexpected upstream query %q", pageURL)
 		return nil, nil
-	})}
+	}))
 	ctx := context.Background()
 	co, err := c.Company(ctx, "microsoft")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if co.URL != base+"/company/microsoft/" || co.ID != "1035" || !co.Verified || !co.Premium {
+	if co.URL != defaultBaseURL+"/company/microsoft/" || co.ID != "1035" || !co.Verified || !co.Premium {
 		t.Fatalf("unexpected company header: %+v", co)
 	}
 	if co.AssociatedMembersCount == nil || *co.AssociatedMembersCount != 231102 ||
@@ -146,9 +168,10 @@ func TestCompanyRichFieldsAndValidation(t *testing.T) {
 		t.Fatalf("unexpected related pages: affiliated=%+v similar=%+v", co.AffiliatedPages, co.SimilarPages)
 	}
 	for slug := range invalidPayloads {
-		if _, err := c.Company(ctx, slug); err == nil {
-			t.Fatalf("expected validation error for %s", slug)
-		}
+		t.Run("invalid/"+slug, func(t *testing.T) {
+			_, err := c.Company(ctx, slug)
+			assertContractError(t, err)
+		})
 	}
 }
 
@@ -192,6 +215,7 @@ func TestProfileRichFieldsAndValidation(t *testing.T) {
 	}}`
 	invalidPayloads := map[string]string{
 		"neg-followers":       `{"profile":{"slug":"neg-followers","name":"Neg","followers_count":-1}}`,
+		"bad-website":         `{"profile":{"slug":"bad-website","name":"Web","website":"javascript:alert(1)"}}`,
 		"empty-featured":      `{"profile":{"slug":"empty-featured","name":"Feat","featured":[{"type":"Post"}]}}`,
 		"empty-activity":      `{"profile":{"slug":"empty-activity","name":"Act","activity":[{"published_label":"1d"}]}}`,
 		"empty-exp-title":     `{"profile":{"slug":"empty-exp-title","name":"Exp","experience":[{"company":"Acme"}]}}`,
@@ -210,27 +234,27 @@ func TestProfileRichFieldsAndValidation(t *testing.T) {
 		"bad-interest-kind":   `{"profile":{"slug":"bad-interest-kind","name":"Int","interests":[{"name":"Microsoft","kind":"unknown","slug":"microsoft","url":"https://www.linkedin.com/company/microsoft/"}]}}`,
 		"empty-interest-slug": `{"profile":{"slug":"empty-interest-slug","name":"Int","interests":[{"name":"Microsoft","kind":"company","url":"https://www.linkedin.com/company/microsoft/"}]}}`,
 	}
-	c := Client{Reader: readerFunc(func(_ context.Context, pageURL, expression string) (json.RawMessage, error) {
+	c := mustNewClient(t, readerFunc(func(_ context.Context, pageURL, expression string) (json.RawMessage, error) {
 		if expression == "" {
 			t.Fatal("expected non-empty expression")
 		}
-		if pageURL == base+"/in/satyanadella/" {
+		if pageURL == defaultBaseURL+"/in/satyanadella/" {
 			return json.RawMessage(richPayload), nil
 		}
 		for slug, body := range invalidPayloads {
-			if pageURL == base+"/in/"+slug+"/" {
+			if pageURL == defaultBaseURL+"/in/"+slug+"/" {
 				return json.RawMessage(body), nil
 			}
 		}
 		t.Fatalf("unexpected upstream query %q", pageURL)
 		return nil, nil
-	})}
+	}))
 	ctx := context.Background()
 	p, err := c.Profile(ctx, "satyanadella")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p.URL != base+"/in/satyanadella/" || p.Pronouns != "he/him" || !p.Verified || !p.Premium || !p.TopVoice ||
+	if p.URL != defaultBaseURL+"/in/satyanadella/" || p.Pronouns != "he/him" || !p.Verified || !p.Premium || !p.TopVoice ||
 		!p.OpenToWork || !p.Hiring || p.ConnectionDegree != "2nd" {
 		t.Fatalf("unexpected top card badges/fields: %+v", p)
 	}
@@ -258,8 +282,9 @@ func TestProfileRichFieldsAndValidation(t *testing.T) {
 		t.Fatalf("unexpected profile sections: %+v", p)
 	}
 	for slug := range invalidPayloads {
-		if _, err := c.Profile(ctx, slug); err == nil {
-			t.Fatalf("expected validation error for %s", slug)
-		}
+		t.Run("invalid/"+slug, func(t *testing.T) {
+			_, err := c.Profile(ctx, slug)
+			assertContractError(t, err)
+		})
 	}
 }
