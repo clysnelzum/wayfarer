@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"time"
 )
 
 //go:embed jobs.js
@@ -14,6 +15,9 @@ var jobsExpression string
 
 //go:embed job.js
 var jobExpression string
+
+//go:embed job_description.js
+var jobDescriptionExpression string
 
 //go:embed job_cards.js
 var jobCardExpression string
@@ -32,16 +36,35 @@ type Reader interface {
 
 type Client struct{ Reader Reader }
 
+type pageReadFunc func(context.Context, string, string) (json.RawMessage, error)
+
+func (f pageReadFunc) Read(ctx context.Context, path, expression string) (json.RawMessage, error) {
+	return f(ctx, path, expression)
+}
+
+func renderReader(reader Reader) Reader {
+	if rendering, ok := reader.(interface {
+		ReadRendered(context.Context, string, string) (json.RawMessage, error)
+	}); ok {
+		return pageReadFunc(rendering.ReadRendered)
+	}
+	return reader
+}
+
 type JobResults struct {
-	Items      []JobSummary   `json:"items"`
-	Pagination *JobPagination `json:"pagination,omitempty"`
-	Search     *JobSearchInfo `json:"search,omitempty"`
-	Sections   []JobSection   `json:"sections,omitempty"`
+	Items                []JobSummary   `json:"items"`
+	Pagination           *JobPagination `json:"pagination,omitempty"`
+	Search               *JobSearchInfo `json:"search,omitempty"`
+	Sections             []JobSection   `json:"sections,omitempty"`
+	RecommendationStatus string         `json:"recommendation_status,omitempty"`
 }
 
 type JobSection struct {
-	Title  string   `json:"title"`
-	JobIDs []string `json:"job_ids"`
+	Title         string            `json:"title"`
+	JobIDs        []string          `json:"job_ids"`
+	Source        string            `json:"source,omitempty"`
+	SourceRef     string            `json:"source_ref,omitempty"`
+	SourceContext *JobSourceContext `json:"-"`
 }
 
 type JobPagination struct {
@@ -52,6 +75,9 @@ type JobPagination struct {
 }
 
 type JobSearchInfo struct {
+	Source               string              `json:"source,omitempty"`
+	SourceRef            string              `json:"source_ref,omitempty"`
+	SourceContext        *JobSourceContext   `json:"-"`
 	MatchMode            string              `json:"match_mode"`
 	ResultCount          *int64              `json:"result_count,omitempty"`
 	ResultCountQualifier string              `json:"result_count_qualifier,omitempty"`
@@ -59,6 +85,7 @@ type JobSearchInfo struct {
 	ResultCountLabel     string              `json:"result_count_label,omitempty"`
 	Notice               string              `json:"notice,omitempty"`
 	SelectedJobID        string              `json:"selected_job_id,omitempty"`
+	AlertEnabled         *bool               `json:"alert_enabled,omitempty"`
 	SuggestedFacets      []JobSuggestedFacet `json:"suggested_facets,omitempty"`
 }
 
@@ -69,40 +96,53 @@ type JobSuggestedFacet struct {
 }
 
 type JobSummary struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Company     string   `json:"company"`
-	Location    string   `json:"location"`
-	URL         string   `json:"url"`
-	Workplace   string   `json:"workplace,omitempty"`
-	PostedLabel string   `json:"posted_label,omitempty"`
-	Verified    bool     `json:"verified,omitempty"`
-	Promoted    bool     `json:"promoted,omitempty"`
-	Viewed      bool     `json:"viewed,omitempty"`
-	Saved       bool     `json:"saved,omitempty"`
-	EasyApply   bool     `json:"easy_apply,omitempty"`
-	Signals     []string `json:"signals,omitempty"`
+	ID                string   `json:"id"`
+	Title             string   `json:"title"`
+	Company           string   `json:"company"`
+	Location          string   `json:"location"`
+	URL               string   `json:"url"`
+	Workplace         string   `json:"workplace,omitempty"`
+	PostedLabel       string   `json:"posted_label,omitempty"`
+	CompensationLabel string   `json:"compensation_label,omitempty"`
+	BenefitsLabel     string   `json:"benefits_label,omitempty"`
+	NetworkLabel      string   `json:"network_label,omitempty"`
+	Verified          bool     `json:"verified,omitempty"`
+	Promoted          bool     `json:"promoted,omitempty"`
+	Viewed            bool     `json:"viewed,omitempty"`
+	Saved             bool     `json:"saved,omitempty"`
+	EasyApply         bool     `json:"easy_apply,omitempty"`
+	Signals           []string `json:"signals,omitempty"`
 }
 
 type Job struct {
-	ID                  string                  `json:"id"`
-	Title               string                  `json:"title"`
-	Company             string                  `json:"company"`
-	URL                 string                  `json:"url"`
-	Description         string                  `json:"description"`
-	CompanySlug         string                  `json:"company_slug,omitempty"`
-	Location            string                  `json:"location,omitempty"`
-	PostedLabel         string                  `json:"posted_label,omitempty"`
-	Workplace           string                  `json:"workplace,omitempty"`
-	EmploymentType      string                  `json:"employment_type,omitempty"`
-	ApplyMethod         string                  `json:"apply_method,omitempty"`
-	ApplicationStatus   string                  `json:"application_status,omitempty"`
-	ApplicationActivity *JobApplicationActivity `json:"application_activity,omitempty"`
-	ViewerApplication   *JobViewerApplication   `json:"viewer_application,omitempty"`
-	Verified            bool                    `json:"verified,omitempty"`
-	Promoted            bool                    `json:"promoted,omitempty"`
-	Saved               *bool                   `json:"saved,omitempty"`
-	RelatedJobs         []JobSummary            `json:"related_jobs,omitempty"`
+	ID                     string                  `json:"id"`
+	Title                  string                  `json:"title"`
+	Company                string                  `json:"company"`
+	URL                    string                  `json:"url"`
+	Description            string                  `json:"description"`
+	DescriptionBlocks      []JobDescriptionBlock   `json:"description_blocks,omitempty"`
+	CompanySlug            string                  `json:"company_slug,omitempty"`
+	Location               string                  `json:"location,omitempty"`
+	PostedLabel            string                  `json:"posted_label,omitempty"`
+	CompensationLabel      string                  `json:"compensation_label,omitempty"`
+	Workplace              string                  `json:"workplace,omitempty"`
+	EmploymentType         string                  `json:"employment_type,omitempty"`
+	ApplyMethod            string                  `json:"apply_method,omitempty"`
+	ApplicationStatus      string                  `json:"application_status,omitempty"`
+	SimilarJobAlertEnabled *bool                   `json:"similar_job_alert_enabled,omitempty"`
+	ApplicationActivity    *JobApplicationActivity `json:"application_activity,omitempty"`
+	ViewerApplication      *JobViewerApplication   `json:"viewer_application,omitempty"`
+	Verified               bool                    `json:"verified,omitempty"`
+	Promoted               bool                    `json:"promoted,omitempty"`
+	Saved                  *bool                   `json:"saved,omitempty"`
+	RelatedJobs            []JobSummary            `json:"related_jobs,omitempty"`
+}
+
+type JobDescriptionBlock struct {
+	Kind    string   `json:"kind"`
+	Text    string   `json:"text,omitempty"`
+	Ordered *bool    `json:"ordered,omitempty"`
+	Items   []string `json:"items,omitempty"`
 }
 
 type JobApplicationActivity struct {
@@ -133,21 +173,51 @@ func (c Client) Jobs(ctx context.Context, q JobQuery) (JobResults, error) {
 	if err != nil {
 		return JobResults{}, err
 	}
+	link := q.SourceContext
+	if q.Source != "" {
+		if link == nil {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 26*time.Second)
+			defer cancel()
+			resolved, err := c.resolveJobSource(ctx, q.Source)
+			if err != nil {
+				return JobResults{}, err
+			}
+			if !resolved.validFor(q.Source) {
+				return JobResults{}, errors.New("invalid recommendation search link from Chrome")
+			}
+			link = &resolved
+		}
+		path = link.searchPath(q.Page)
+	}
+	reader := c.Reader
+	if q.RecommendationLimit > 0 {
+		reader = renderReader(reader)
+	}
+	type upstreamSection struct {
+		JobSection
+		Context *JobSourceContext `json:"source_context"`
+	}
 	upstream, err := read[struct {
-		Items         []JobSummary `json:"items"`
-		Sections      []JobSection `json:"sections,omitempty"`
-		Page          int          `json:"page"`
-		HasMore       bool         `json:"has_more"`
-		QueryEvidence url.Values   `json:"query_evidence"`
+		Items                []JobSummary      `json:"items"`
+		Sections             []upstreamSection `json:"sections,omitempty"`
+		Page                 int               `json:"page"`
+		HasMore              bool              `json:"has_more"`
+		QueryEvidence        url.Values        `json:"query_evidence"`
+		RecommendationStatus string            `json:"recommendation_status"`
 		JobSearchInfo
-	}](ctx, c.Reader, path, jobScript(jobsExpression))
+	}](ctx, reader, path, jobListScript(q.RecommendationLimit, ""))
 	if err != nil {
 		return JobResults{}, err
 	}
 	if upstream.Page != q.Page {
 		return JobResults{}, fmt.Errorf("%w: page", ErrSearchMismatch)
 	}
-	if upstream.Items == nil || len(upstream.Items) > searchPageSize {
+	limit := searchPageSize
+	if q.RecommendationLimit > 0 {
+		limit = q.RecommendationLimit
+	}
+	if upstream.Items == nil || len(upstream.Items) > limit {
 		return JobResults{}, errors.New("unexpected size for browser jobs result")
 	}
 	ids := make(map[string]struct{}, len(upstream.Items))
@@ -173,6 +243,9 @@ func (c Client) Jobs(ctx context.Context, q JobQuery) (JobResults, error) {
 				}
 				seen[facet.ID] = true
 			}
+			upstream.JobSearchInfo.Source = q.Source
+			upstream.JobSearchInfo.SourceRef = ""
+			upstream.JobSearchInfo.SourceContext = link
 			result.Search = &upstream.JobSearchInfo
 		}
 		result.Pagination = &JobPagination{Page: q.Page, HasMore: upstream.HasMore && len(upstream.Items) > 0 && q.Page < MaxSearchPage}
@@ -188,6 +261,9 @@ func (c Client) Jobs(ctx context.Context, q JobQuery) (JobResults, error) {
 		}
 	} else {
 		for _, section := range upstream.Sections {
+			if _, ok := recommendationOrigins[section.Source]; section.Source != "" && !ok {
+				return JobResults{}, errors.New("invalid recommendation section source")
+			}
 			if section.Title == "" || len(section.JobIDs) == 0 {
 				return JobResults{}, errors.New("incomplete recommendation section")
 			}
@@ -196,8 +272,23 @@ func (c Client) Jobs(ctx context.Context, q JobQuery) (JobResults, error) {
 					return JobResults{}, errors.New("recommendation section refers to an absent job")
 				}
 			}
+			section.SourceRef = ""
+			if section.Context != nil && section.Context.validFor(section.Source) {
+				section.SourceContext = section.Context
+			}
+			result.Sections = append(result.Sections, section.JobSection)
 		}
-		result.Sections = upstream.Sections
+		if q.RecommendationLimit > 0 {
+			switch upstream.RecommendationStatus {
+			case "limit_reached", "budget_reached", "no_more_observed":
+				if (len(upstream.Items) == q.RecommendationLimit) != (upstream.RecommendationStatus == "limit_reached") {
+					return JobResults{}, errors.New("inconsistent recommendation load status")
+				}
+			default:
+				return JobResults{}, errors.New("missing or invalid recommendation load status")
+			}
+			result.RecommendationStatus = upstream.RecommendationStatus
+		}
 	}
 	return result, nil
 }
@@ -206,7 +297,7 @@ func (c Client) Job(ctx context.Context, id string) (Job, error) {
 	v, err := read[struct {
 		Job      Job  `json:"job"`
 		NotFound bool `json:"not_found"`
-	}](ctx, c.Reader, "/jobs/view/"+id+"/", jobScript(jobExpression))
+	}](ctx, c.Reader, "/jobs/view/"+id+"/", "() => ("+jobExpression+")(("+jobCardExpression+"), ("+jobDescriptionExpression+"))")
 	if err != nil {
 		return Job{}, err
 	}

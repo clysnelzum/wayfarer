@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -20,14 +19,34 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 		value   string
 		status  int
 		payload string
+		mode    string
 	}{
-		{"last page", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer"}],"page":2,"match_mode":"results","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"has_more":false`},
-		{"past last page", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","result_count":25,"result_count_qualifier":"exact","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"out_of_range":true`},
-		{"dropped filter", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","query_evidence":{"keywords":["DevOps"],"start":["25"]}}}`, 502, `"code":"upstream_search_changed"`},
-		{"auth required", `{"state":"auth"}`, 503, `"code":"upstream_auth_required"`},
-		{"no debugger", ``, 503, `"code":"upstream_debugger_unavailable"`},
+		{"last page", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer"}],"page":2,"match_mode":"results","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"has_more":false`, ""},
+		{"search alert off", `{"state":"ok","value":{"items":[{"id":"101","title":"Developer"}],"page":2,"match_mode":"results","alert_enabled":false,"query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"alert_enabled":false`, ""},
+		{"past last page", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","result_count":25,"result_count_qualifier":"exact","query_evidence":{"keywords":["DevOps"],"start":["25"],"f_EA":["true"]}}}`, 200, `"out_of_range":true`, ""},
+		{"dropped filter", `{"state":"ok","value":{"items":[],"page":2,"match_mode":"no_results","query_evidence":{"keywords":["DevOps"],"start":["25"]}}}`, 502, `"code":"upstream_search_changed"`, ""},
+		{"auth required", `{"state":"auth"}`, 503, `"code":"upstream_auth_required"`, ""},
+		{"no debugger", ``, 503, `"code":"upstream_debugger_unavailable"`, ""},
+		{"expanded recommendations", `{"state":"ok","value":{"items":[{"id":"133","title":"Designer"}],"page":0,"recommendation_status":"budget_reached","sections":[{"title":"More jobs","job_ids":["133"]}]}}`, 200, `"recommendation_status":"budget_reached"`, "expanded"},
+		{"unavailable job detail", `{"state":"ok","value":{"not_found":true}}`, 404, `"code":"job_not_found"`, "detail"},
+		{"job detail alert disabled", `{"state":"ok","value":{"job":{"id":"42","title":"Developer","company":"Example","description":"Build software.","similar_job_alert_enabled":false,"compensation_label":"180K USD/yr - 225K USD/yr"}}}`, 200, `"similar_job_alert_enabled":false`, "detail"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			path := "/v1/jobs?q=DevOps&page=2&under_10_applicants=true"
+			wantURL := "https://www.linkedin.com/jobs/search-results/?f_EA=true&keywords=DevOps&start=25"
+			methods := []string{"Target.createTarget", "Target.attachToTarget"}
+			extractorMarker := "SearchResultsMainContent"
+			switch tc.mode {
+			case "expanded":
+				path = "/v1/jobs?limit=12"
+				wantURL = "https://www.linkedin.com/jobs/"
+				methods = append(methods, "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride")
+			case "detail":
+				path = "/v1/jobs/42"
+				wantURL = "https://www.linkedin.com/jobs/view/42/"
+				extractorMarker = "job.similar_job_alert_enabled"
+			}
+			methods = append(methods, "Page.navigate", "Runtime.evaluate", "Target.closeTarget")
 			closed := make(chan struct{}, 1)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tc.value == "" {
@@ -42,7 +61,7 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 				}
 				defer ws.Close()
 				_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
-				for _, method := range []string{"Target.createTarget", "Target.attachToTarget", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride", "Page.navigate", "Runtime.evaluate", "Target.closeTarget"} {
+				for _, method := range methods {
 					var request struct {
 						ID     int
 						Method string
@@ -64,14 +83,13 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 					case "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride":
 						result = struct{}{}
 					case "Page.navigate":
-						u, err := url.Parse(request.Params.URL)
-						if err != nil || u.Host != "www.linkedin.com" || u.Path != "/jobs/search-results/" || u.RawQuery != "f_EA=true&keywords=DevOps&start=25" {
+						if request.Params.URL != wantURL {
 							t.Errorf("unexpected upstream navigation: %s", request.Params.URL)
 						}
 						result = map[string]string{"frameId": "frame"}
 					case "Runtime.evaluate":
-						if !request.Params.AwaitPromise || !strings.Contains(request.Params.Expression, "SearchResultsMainContent") {
-							t.Error("expected the asynchronous job search extractor")
+						if !request.Params.AwaitPromise || !strings.Contains(request.Params.Expression, extractorMarker) {
+							t.Error("expected the asynchronous job extractor for this route")
 						}
 						result = map[string]any{"result": map[string]any{"value": json.RawMessage(tc.value)}}
 					case "Target.closeTarget":
@@ -92,7 +110,8 @@ func TestJobsHTTPThroughCDP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := httptest.NewRequest(http.MethodGet, "/v1/jobs?q=DevOps&page=2&under_10_applicants=true", nil)
+			defer browser.Close()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
 			req.Header.Set("Authorization", "Bearer local")
 			w := httptest.NewRecorder()
 			New("local", linkedin.Client{Reader: browser}).ServeHTTP(w, req)

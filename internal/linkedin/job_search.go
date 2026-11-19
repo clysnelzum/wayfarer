@@ -12,17 +12,22 @@ import (
 )
 
 const MaxSearchPage = 100
+const MaxJobRecommendationLimit = 50
 const searchPageSize = 25 // Offset increment observed on LinkedIn's search UI.
 const maxSuggestedFacets = 12
 
 type JobQuery struct {
-	Keywords string
-	Page     int // 0 for recommendations, otherwise one-based.
-	Filters  JobFilters
+	Keywords            string
+	Source              string
+	SourceContext       *JobSourceContext // Trusted context from an API-issued reference.
+	Page                int               // 0 for recommendations, otherwise one-based.
+	RecommendationLimit int               // 0 requests the initial batch only.
+	Filters             JobFilters
 }
 
 type JobFilters struct {
 	LocationID        string
+	LocationIDs       []string
 	CompanyID         string
 	CompanyIDs        []string
 	PostedWithin      string
@@ -47,12 +52,39 @@ var (
 	employmentFacets  = map[string]string{"full_time": "272015", "part_time": "273001", "contract": "274001", "internship": "275001", "volunteer": "272002"}
 )
 
+func (f JobFilters) empty() bool {
+	return f.LocationID == "" && len(f.LocationIDs) == 0 && f.CompanyID == "" && len(f.CompanyIDs) == 0 && f.PostedWithin == "" &&
+		len(f.Workplace) == 0 && len(f.Experience) == 0 && len(f.Employment) == 0 && len(f.SuggestedFacetIDs) == 0 &&
+		!f.EasyApply && !f.InNetwork && !f.Verified && !f.Under10
+}
+
 func (q JobQuery) searchPath() (string, error) {
 	f := q.Filters
+	if q.SourceContext != nil && !q.SourceContext.validFor(q.Source) {
+		return "", errors.New("invalid recommendation source context")
+	}
+	if q.Source != "" {
+		if _, ok := recommendationOrigins[q.Source]; !ok {
+			return "", errors.New("source must be preferences or profile_match")
+		}
+		if q.Keywords != "" || q.RecommendationLimit != 0 || !f.empty() {
+			return "", errors.New("source can only be combined with page")
+		}
+		if q.Page < 1 || q.Page > MaxSearchPage {
+			return "", fmt.Errorf("page must be an integer from 1 to %d", MaxSearchPage)
+		}
+		return "/jobs/", nil // Resolve the personalized destination before searching.
+	}
+	if q.RecommendationLimit != 0 {
+		if q.Keywords != "" {
+			return "", errors.New("limit is only supported for recommendations without q")
+		}
+		if q.RecommendationLimit < 1 || q.RecommendationLimit > MaxJobRecommendationLimit {
+			return "", fmt.Errorf("limit must be an integer from 1 to %d", MaxJobRecommendationLimit)
+		}
+	}
 	if q.Keywords == "" {
-		if q.Page != 0 || f.LocationID != "" || f.CompanyID != "" || len(f.CompanyIDs) != 0 || f.PostedWithin != "" ||
-			len(f.Workplace) != 0 || len(f.Experience) != 0 || len(f.Employment) != 0 || len(f.SuggestedFacetIDs) != 0 ||
-			f.EasyApply || f.InNetwork || f.Verified || f.Under10 {
+		if q.Page != 0 || !f.empty() {
 			return "", errors.New("page and filters require a keyword search (q)")
 		}
 		return "/jobs/", nil
@@ -67,11 +99,18 @@ func (q JobQuery) searchPath() (string, error) {
 	if q.Page > 1 {
 		args.Set("start", strconv.Itoa((q.Page-1)*searchPageSize))
 	}
+	locations := f.LocationIDs
 	if f.LocationID != "" {
-		if !locationIDPattern.MatchString(f.LocationID) {
-			return "", errors.New("expected a numeric geo_id")
+		if len(locations) != 0 {
+			return "", errors.New("use either geo_id or geo_ids, not both")
 		}
-		args.Set("geoId", f.LocationID)
+		locations = []string{f.LocationID}
+	}
+	if len(locations) > 0 {
+		if !validIDList(locations, locationIDPattern, 20) {
+			return "", errors.New("geo_ids accepts up to 20 distinct numeric LinkedIn geography IDs")
+		}
+		args.Set("geoId", strings.Join(locations, ","))
 	}
 	companies := f.CompanyIDs
 	if f.CompanyID != "" {
@@ -80,16 +119,9 @@ func (q JobQuery) searchPath() (string, error) {
 		}
 		companies = []string{f.CompanyID}
 	}
-	if len(companies) > 20 {
-		return "", errors.New("company_ids accepts at most 20 organization IDs")
-	}
 	if len(companies) > 0 {
-		seen := make(map[string]bool, len(companies))
-		for _, id := range companies {
-			if !companyIDPattern.MatchString(id) || seen[id] {
-				return "", errors.New("company IDs must be distinct numeric LinkedIn organization IDs")
-			}
-			seen[id] = true
+		if !validIDList(companies, companyIDPattern, 20) {
+			return "", errors.New("company_ids accepts up to 20 distinct numeric LinkedIn organization IDs")
 		}
 		args.Set("f_C", strings.Join(companies, ","))
 	}
@@ -170,7 +202,11 @@ func validateObservedSearch(path string, actual url.Values) error {
 		return err
 	}
 	want := u.Query()
-	for _, key := range []string{"keywords", "start", "geoId", "f_C", "f_TPR", "f_SAL", "f_AL", "f_JIYN", "f_VJ", "f_EA"} {
+	keys := []string{"keywords", "start", "geoId", "f_C", "f_TPR", "f_SAL", "f_AL", "f_JIYN", "f_VJ", "f_EA"}
+	if want.Has("origin") {
+		keys = append(keys, "origin", "originToLandingJobPostings")
+	}
+	for _, key := range keys {
 		if len(actual[key]) > 1 {
 			return fmt.Errorf("%w: duplicated %s", ErrSearchMismatch, key)
 		}
@@ -180,6 +216,9 @@ func validateObservedSearch(path string, actual url.Values) error {
 			if b == "" {
 				continue
 			}
+			a, b = normalizedCSV(a), normalizedCSV(b)
+		case "origin":
+			a, b = strings.TrimPrefix(a, "JobSearchOrigin_"), strings.TrimPrefix(b, "JobSearchOrigin_")
 		case "start":
 			if a == "0" {
 				a = ""
@@ -188,7 +227,7 @@ func validateObservedSearch(path string, actual url.Values) error {
 			if a == "false" {
 				a = ""
 			}
-		case "f_C":
+		case "f_C", "originToLandingJobPostings":
 			a, b = normalizedCSV(a), normalizedCSV(b)
 		case "f_SAL":
 			a, b = normalizedFacets(a), normalizedFacets(b)
@@ -217,6 +256,20 @@ func normalizedFacets(value string) string {
 	}
 	sort.Strings(groups)
 	return strings.Join(groups, "$")
+}
+
+func validIDList(ids []string, pattern *regexp.Regexp, max int) bool {
+	if len(ids) < 1 || len(ids) > max {
+		return false
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !pattern.MatchString(id) || seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	return true
 }
 
 func (q JobQuery) Validate() error {

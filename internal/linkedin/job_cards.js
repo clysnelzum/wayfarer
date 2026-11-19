@@ -1,6 +1,11 @@
 (() => {
   const clean = value => (value || '').replace(/\s+/g, ' ').trim();
   const visible = e => e.getClientRects().length > 0;
+  const switchState = e => {
+    const aria = e.getAttribute('aria-checked');
+    if (aria !== null) return aria === 'true' ? true : aria === 'false' ? false : undefined;
+    if (e.tagName === 'INPUT' && e.type === 'checkbox' && typeof e.checked === 'boolean') return e.checked;
+  };
   const workplace = text => {
     const t = clean(text).toLowerCase();
     if (/^(?:en remoto|remoto|remote)$/.test(t)) return 'remote';
@@ -25,6 +30,13 @@
     return Number.isSafeInteger(n) ? n : undefined;
   };
   const dateLabel = text => clean(text).match(/^(?:publicado\s+)?((?:hace\s+\d+\s+[\p{L}]+)|(?:\d+\s+[\p{L}]+\s+ago)|(?:ahora mismo|just now|today|hoy))(?:\b|$)/iu)?.[1];
+  const compensationPattern = /^\d[\d.,]*(?:\s*[kmb])?\s+[A-Z]{3}\s*\/\s*(?:yr|year|mo|month|wk|week|hr|hour|day|año|mes|sem|hora|día)(?:\s*[-–—]\s*\d[\d.,]*(?:\s*[kmb])?\s+[A-Z]{3}\s*\/\s*(?:yr|year|mo|month|wk|week|hr|hour|day|año|mes|sem|hora|día))?$/iu;
+  const compensationLabel = text => {
+    const label = clean(text);
+    return label.length <= 300 && compensationPattern.test(label) ? label : '';
+  };
+  const benefits = /^(?:prestaci[oó]n(?:es)?\b|(?:de )?plan de pensiones 401\(k\)|servicios médicos\b|\d+\s+(?:prestaci[oó]n(?:es)?|benefits?)\b|(?:medical|dental|vision) benefit\b)/iu;
+  const network = /^(?:\d+\s+)?(?:antiguos alumnos (?:trabajan|trabaja) aquí|antiguos alumnos (?:trabajan|trabaja) en esta empresa|school alumni (?:works?|working) here|alumni (?:works?|working) here|connections? (?:works?|working) here)[.!]?$/iu;
   function cards(root, search, limit = 25, exclude = '') {
     const selector = search ? '[componentkey^="job-card-component-ref-"]' : 'a[href*="currentJobId="], a[href*="/jobs/view/"]';
     const rows = new Map();
@@ -61,10 +73,33 @@
       if (signals.length) row.signals = signals;
       const posted = labels.map(dateLabel).find(Boolean);
       if (posted) row.posted_label = posted;
+      // Keep these localized as displayed. Do not infer currency, pay period,
+      // benefit coverage, or that a listed connection is an employee.
+      const pay = labels.map(compensationLabel).find(Boolean);
+      const benefit = labels.find(t => benefits.test(t));
+      const connection = labels.find(t => network.test(t));
+      if (pay) row.compensation_label = pay;
+      if (benefit) row.benefits_label = benefit.slice(0, 500);
+      if (connection) row.network_label = connection.slice(0, 300);
       rows.set(id, row);
       if (rows.size >= limit) break;
     }
     return [...rows.values()];
   }
-  return {clean, visible, workplace, type, dateLabel, number, cards};
+  function recommendationLinks(root) {
+    const out = [];
+    for (const a of root.querySelectorAll('a[href*="originToLandingJobPostings="]')) {
+      if (!visible(a) || !/^(?:mostrar todo|ver todo|show all|see all)$/i.test(clean(a.innerText))) continue;
+      const url = new URL(a.href);
+      if (url.origin !== location.origin || url.pathname !== '/jobs/search-results/' || url.searchParams.has('currentJobId')) continue;
+      const keys = ['origin', 'keywords', 'geoId', 'originToLandingJobPostings'];
+      if (keys.some(key => url.searchParams.getAll(key).length !== 1)) continue;
+      const [origin, keywords, locations, seed] = keys.map(k => url.searchParams.get(k));
+      const mode = origin.replace(/^JobSearchOrigin_/, '');
+      const source = mode === 'PREFERENCES_LANDING' ? 'preferences' : mode === 'QUALIFICATION_LANDING' ? 'profile_match' : '';
+      if (source) out.push({source, origin, keywords, locations, seed});
+    }
+    return out;
+  }
+  return {clean, visible, switchState, workplace, type, dateLabel, number, compensationLabel, cards, recommendationLinks};
 })()

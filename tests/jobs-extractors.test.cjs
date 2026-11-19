@@ -26,14 +26,16 @@ function harness(url, main, readCards, filterInputs = []) {
   const env = vm.createContext({
     URL, location, performance: {now: () => observations * 200},
     setTimeout: fn => fn(),
+    getComputedStyle: () => ({overflowY: 'auto'}),
     document: {
       querySelector: () => main(++observations),
-      querySelectorAll: selector => selector === '[componentkey="JobsSearchFilters"] input[type="checkbox"]' ? filterInputs : [],
+      querySelectorAll: selector => selector === '[componentkey="JobsSearchFilters"] input[type="checkbox"]' ?
+        (typeof filterInputs === 'function' ? filterInputs(observations) : filterInputs) : [],
     },
   });
   const helpers = vm.runInContext(script('job_cards.js'), env);
   const extract = vm.runInContext(script('jobs.js'), env);
-  return {helpers, extract: () => extract({...helpers, ...(readCards ? {cards: readCards} : {})}), observed: () => observations};
+  return {helpers, extract: (limit, source) => extract({...helpers, ...(readCards ? {cards: readCards} : {})}, limit, source), observed: () => observations};
 }
 
 test('reads late-mounted search notices and does not treat broadened jobs as strict matches', async () => {
@@ -96,6 +98,45 @@ test('exposes available suggestions in toolbar order without executing actions',
   ]);
 });
 
+test('waits briefly for visible facet bindings to hydrate after the cards settle', async () => {
+  const bare = node();
+  bare.labels = [node('AWS')];
+  const ready = {...bare};
+  Object.defineProperty(ready, '__reactFiber$late', {value: {memoizedProps: {
+    selectedExpression: {expression: {bindableBoolean: {key: {key: {value: {
+      id: 'JobSearchResultsPage_SemanticDynamicSuggestionPillSelectBindingKey_230001:277008',
+    }}}}}},
+  }}});
+  const url = 'https://www.linkedin.com/jobs/search-results/?keywords=DevOps';
+  const h = harness(url, () => node(''), () => [{id: '42'}], n => [n < 5 ? bare : ready]);
+  assert.deepEqual(plain(await h.extract()).suggested_facets, [{id: '230001:277008', label: 'AWS', selected: false}]);
+  const unrecognized = harness(url, () => node(''), () => [{id: '42'}], [bare]);
+  const fallback = plain(await unrecognized.extract());
+  assert.deepEqual(fallback.items, [{id: '42'}]);
+  assert.equal(fallback.suggested_facets, undefined);
+});
+
+test('reads the current search alert without mistaking an unknown state for off', async () => {
+  const selector = '[componentkey^="JobSearchAlertToggleRef_"] [role="switch"]';
+  const url = 'https://www.linkedin.com/jobs/search-results/?keywords=DevOps&f_AL=true';
+  const off = {...node(), tagName: 'INPUT', type: 'checkbox', checked: false};
+  const on = node('', {attrs: {'aria-checked': 'true'}});
+  const hidden = node('', {hidden: true, attrs: {'aria-checked': 'true'}});
+  const invalid = node('', {attrs: {'aria-checked': 'mixed'}});
+  const snapshot = (controls, empty) => node(empty ? '0 results' : '', {children: {[selector]: controls}});
+  for (const [controls, expected, empty] of [
+    [[off, hidden], false, false], [[on], true, true], [[off, off], false, false],
+    [[off, on], undefined, false], [[invalid], undefined, false], [[], undefined, false],
+  ]) {
+    const h = harness(url, () => snapshot(controls, empty), () => empty ? [] : [{id: '42'}]);
+    const result = plain(await h.extract());
+    assert.equal(result.alert_enabled, expected);
+    assert.equal(result.match_mode, empty ? 'no_results' : 'results');
+  }
+  const late = harness(url, n => snapshot([n < 3 ? off : on], false), () => [{id: '42'}]);
+  assert.equal(plain(await late.extract()).alert_enabled, true);
+});
+
 test('does not confuse a skeleton or mismatched page indicator with an empty search', async () => {
   const search = 'https://www.linkedin.com/jobs/search-results/?keywords=DevOps&start=25';
   const skeleton = harness(search, () => node(''), () => []);
@@ -128,14 +169,31 @@ test('preserves the total on an explicitly empty page beyond the visible last pa
   assert.deepEqual(empty.items, []);
 });
 
+test('resolves only a matching unambiguous show-all link', async () => {
+  const link = (href, label = 'Mostrar todo') => Object.assign(node(label), {href});
+  const url = 'https://www.linkedin.com/jobs/search-results/?origin=JobSearchOrigin_PREFERENCES_LANDING&keywords=DevOps&geoId=10,20&originToLandingJobPostings=31,32';
+  const anchors = [link(url), link(url + '&currentJobId=31', 'DevOps'), link(url.replace('www.linkedin.com', 'example.com'))];
+  const root = () => node('', {children: {'a[href*="originToLandingJobPostings="]': anchors}});
+  const h = harness('https://www.linkedin.com/jobs/', root);
+  assert.deepEqual(plain(await h.extract(0, 'preferences')), {
+    source: 'preferences', origin: 'JobSearchOrigin_PREFERENCES_LANDING', keywords: 'DevOps', locations: '10,20', seed: '31,32'
+  });
+  assert.deepEqual(plain(await h.extract(0, 'profile_match')), {unavailable: true});
+  anchors.push(link(url.replace('keywords=DevOps', 'keywords=Other')));
+  assert.equal(await h.extract(0, 'preferences'), null);
+});
+
 test('retains recommendation panel membership without duplicating cards or inventing associations', async () => {
   const a = node('Empleos según tus preferencias');
   const b = node('Empleos que coincidan con tu perfil');
   const sidebar = node('Barra lateral', {excluded: true});
   const main = node('', {children: {[headingSelector]: [a, b, sidebar]}});
+  const viewAll = Object.assign(node('Mostrar todo'), {
+    href: 'https://www.linkedin.com/jobs/search-results/?origin=JobSearchOrigin_PREFERENCES_LANDING&keywords=Example&geoId=10&originToLandingJobPostings=41,99',
+  });
   main.records = [{id: '41'}, {id: '42'}];
   for (const [heading, records] of [[a, [{id: '41'}, {id: '99'}]], [b, [{id: '42'}, {id: '41'}]]]) {
-    const group = node();
+    const group = node('', {children: {'a[href*="originToLandingJobPostings="]': heading === a ? [viewAll] : []}});
     heading.parentElement = group;
     group.parentElement = main;
     group.records = records;
@@ -144,9 +202,45 @@ test('retains recommendation panel membership without duplicating cards or inven
   const result = plain(await harness('https://www.linkedin.com/jobs/', () => main, el => el.records).extract());
   assert.deepEqual(result.items, [{id: '41'}, {id: '42'}]);
   assert.deepEqual(result.sections, [
-    {title: a.innerText, job_ids: ['41']},
+    {title: a.innerText, job_ids: ['41'], source: 'preferences', source_context: {
+      source: 'preferences', origin: 'JobSearchOrigin_PREFERENCES_LANDING', keywords: 'Example', locations: '10', seed: '41,99'
+    }},
     {title: b.innerText, job_ids: ['42', '41']},
   ]);
+});
+
+test('scrolls recommendations only on request and keeps unique cards as earlier rows unmount', async () => {
+  const main = node();
+  main.querySelector = () => null;
+  main.scrollTop = 0;
+  main.clientHeight = 400;
+  main.scrollHeight = 1000;
+  const cardsAtScroll = (el, _search, cap) => (el.scrollTop > 0 ? ['42', '43', '44'] : ['41', '42']).slice(0, cap).map(id => ({id}));
+  const h = harness('https://www.linkedin.com/jobs/', () => main, cardsAtScroll);
+  const initial = plain(await h.extract());
+  assert.deepEqual(initial.items.map(x => x.id), ['41', '42']);
+  assert.equal(main.scrollTop, 0);
+  const expanded = plain(await h.extract(3));
+  assert.deepEqual(expanded.items.map(x => x.id), ['41', '42', '43']);
+  assert.equal(expanded.recommendation_status, 'limit_reached');
+  assert.ok(main.scrollTop > 0);
+});
+
+test('preserves explicit compensation, benefits and alumni labels without inferring absent values', () => {
+  const card = (id, labels) => node('', {attrs: {componentkey: `job-card-component-ref-${id}`}, children: {
+    p: [node('DevOps Engineer'), node('Example Co'), node('United States'), ...labels.map(label => node(label))],
+  }});
+  const helpers = harness('https://www.linkedin.com/jobs/search-results/', () => null).helpers;
+  const items = plain(helpers.cards(node('', {children: {[jobCards]: [
+    card('81', ['180K USD/yr - 225K USD/yr', 'Servicios médicos, plan de pensiones 401(k)', '5 antiguos alumnos trabajan aquí']),
+    card('82', ['Posted 1 day ago', 'Estimate discussed during interview', '501 employees']),
+  ]}}), true));
+  assert.equal(items[0].compensation_label, '180K USD/yr - 225K USD/yr');
+  assert.equal(items[0].benefits_label, 'Servicios médicos, plan de pensiones 401(k)');
+  assert.equal(items[0].network_label, '5 antiguos alumnos trabajan aquí');
+  assert.equal(items[1].compensation_label, undefined);
+  assert.equal(items[1].benefits_label, undefined);
+  assert.equal(items[1].network_label, undefined);
 });
 
 test('maps observed job card signals while deduplicating responsive copies', () => {

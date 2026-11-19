@@ -67,6 +67,19 @@ func TestRoutes(t *testing.T) {
 	}{
 		{"health", "GET", "/healthz", "Bearer local", "", nil, 200, 0},
 		{"recommendations", "GET", "/v1/jobs", "Bearer local", "", nil, 200, 1},
+		{"preferences source page two", "GET", "/v1/jobs?source=preferences&page=2", "Bearer local", "", nil, 200, 1},
+		{"unavailable source", "GET", "/v1/jobs?source=profile_match", "Bearer local", "recommendation_source_unavailable", linkedin.ErrJobSourceUnavailable, 404, 1},
+		{"unsupported source", "GET", "/v1/jobs?source=recent", "Bearer local", "invalid_query", nil, 400, 0},
+		{"source with query", "GET", "/v1/jobs?source=profile_match&q=Go", "Bearer local", "invalid_query", nil, 400, 0},
+		{"source with false filter", "GET", "/v1/jobs?source=profile_match&verified=false", "Bearer local", "invalid_query", nil, 400, 0},
+		{"signed-in locations search", "GET", "/v1/jobs?q=Go&geo_ids=90009872,101220015", "Bearer local", "", nil, 200, 1},
+		{"duplicate locations", "GET", "/v1/jobs?q=Go&geo_ids=90009872,90009872", "Bearer local", "invalid_query", nil, 400, 0},
+		{"expanded recommendations", "GET", "/v1/jobs?limit=30", "Bearer local", "", nil, 200, 1},
+		{"zero recommendation limit", "GET", "/v1/jobs?limit=0", "Bearer local", "invalid_query", nil, 400, 0},
+		{"recommendation limit too high", "GET", "/v1/jobs?limit=51", "Bearer local", "invalid_query", nil, 400, 0},
+		{"repeated recommendation limit", "GET", "/v1/jobs?limit=1&limit=2", "Bearer local", "invalid_query", nil, 400, 0},
+		{"recommendation limit with search", "GET", "/v1/jobs?q=DevOps&limit=2", "Bearer local", "invalid_query", nil, 400, 0},
+		{"recommendation limit with filter", "GET", "/v1/jobs?limit=2&verified=false", "Bearer local", "invalid_query", nil, 400, 0},
 		{"jobs", "GET", "/v1/jobs?q=DevOps+Go", "Bearer local", "", nil, 200, 1},
 		{"jobs suggested facets", "GET", "/v1/jobs?q=DevOps&suggested_facet_ids=230001%3A277008,228001%3A282003", "Bearer local", "", nil, 200, 1},
 		{"unsupported suggestion group", "GET", "/v1/jobs?q=DevOps&suggested_facet_ids=225001%3A272001", "Bearer local", "invalid_query", nil, 400, 0},
@@ -132,6 +145,14 @@ func TestRoutes(t *testing.T) {
 			}
 			var want linkedin.JobQuery
 			switch tc.name {
+			case "unavailable source":
+				want = linkedin.JobQuery{Source: "profile_match", Page: 1}
+			case "preferences source page two":
+				want = linkedin.JobQuery{Source: "preferences", Page: 2}
+			case "signed-in locations search":
+				want = linkedin.JobQuery{Keywords: "Go", Page: 1, Filters: linkedin.JobFilters{LocationIDs: []string{"90009872", "101220015"}}}
+			case "expanded recommendations":
+				want = linkedin.JobQuery{RecommendationLimit: 30}
 			case "jobs":
 				want = linkedin.JobQuery{Keywords: "DevOps Go", Page: 1}
 			case "jobs suggested facets":

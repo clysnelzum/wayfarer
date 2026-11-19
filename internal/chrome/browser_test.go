@@ -34,7 +34,6 @@ func TestReadReusesDebuggerAndReconnectsBeforeNavigation(t *testing.T) {
 			}
 			var result any = struct{}{}
 			switch m.Method {
-			case "Browser.getVersion":
 			case "Target.createTarget":
 				result = map[string]string{"targetId": "temporary"}
 			case "Target.attachToTarget":
@@ -67,6 +66,13 @@ func TestReadReusesDebuggerAndReconnectsBeforeNavigation(t *testing.T) {
 	defer b.Close()
 	for i, wantConnections := range []int32{1, 1, 2} {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		if i == 2 {
+			select {
+			case <-b.conn.done:
+			case <-ctx.Done():
+				t.Fatal("idle reader did not detect debugger disconnect")
+			}
+		}
 		value, err := b.Read(ctx, "https://www.linkedin.com/jobs/", "() => 42")
 		cancel()
 		if err != nil || string(value) != "42" || connections.Load() != wantConnections || closes.Load() != int32(i+1) {
@@ -79,7 +85,7 @@ func TestReadReusesDebuggerAndReconnectsBeforeNavigation(t *testing.T) {
 }
 
 func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
-	for _, state := range []string{"ok", "auth"} {
+	for _, state := range []string{"ok", "auth", "rendered"} {
 		t.Run(state, func(t *testing.T) {
 			observed := make(chan []string, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,12 +124,12 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 						}
 						payload = map[string]string{"sessionId": "test-session"}
 					case "Emulation.setFocusEmulationEnabled":
-						if m.SessionID != "test-session" || m.Params["enabled"] != true {
+						if state != "rendered" || m.SessionID != "test-session" || m.Params["enabled"] != true {
 							t.Errorf("unexpected focus emulation: %+v", m)
 						}
 						payload = struct{}{}
 					case "Emulation.setDeviceMetricsOverride":
-						if m.SessionID != "test-session" || m.Params["width"] != float64(1280) || m.Params["height"] != float64(900) || m.Params["deviceScaleFactor"] != float64(1) || m.Params["mobile"] != false {
+						if state != "rendered" || m.SessionID != "test-session" || m.Params["width"] != float64(1280) || m.Params["height"] != float64(900) || m.Params["deviceScaleFactor"] != float64(1) || m.Params["mobile"] != false {
 							t.Errorf("unexpected device metrics override: %+v", m)
 						}
 						payload = struct{}{}
@@ -141,11 +147,17 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 							_ = ws.WriteJSON(map[string]any{"id": m.ID, "error": map[string]int{"code": -32000}})
 							continue
 						}
-						payload = map[string]any{"result": map[string]any{"value": map[string]any{"state": state, "value": map[string]int{"count": 1}}}}
+						resultState := state
+						if state == "rendered" {
+							resultState = "ok"
+						}
+						payload = map[string]any{"result": map[string]any{"value": map[string]any{"state": resultState, "value": map[string]int{"count": 1}}}}
 					case "Target.closeTarget":
 						if m.Params["targetId"] != "test-target" {
 							t.Errorf("unexpected target closed: %v", m.Params)
 						}
+						payload = map[string]bool{"success": true}
+						_ = ws.WriteJSON(map[string]any{"id": m.ID, "result": payload})
 						return
 					default:
 						t.Errorf("unexpected command: %s", m.Method)
@@ -162,7 +174,11 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			got, err := b.Read(ctx, "https://www.linkedin.com/jobs/", "() => ({count: 1})")
+			read := b.Read
+			if state == "rendered" {
+				read = b.ReadRendered
+			}
+			got, err := read(ctx, "https://www.linkedin.com/jobs/", "() => ({count: 1})")
 			if state == "auth" {
 				if !errors.Is(err, ErrAuth) {
 					t.Fatalf("got %v, want ErrAuth", err)
@@ -173,16 +189,11 @@ func TestReadUsesAndClosesTemporaryTarget(t *testing.T) {
 					t.Fatalf("unexpected result: %s (%v)", got, err)
 				}
 			}
-			want := []string{
-				"Target.createTarget",
-				"Target.attachToTarget",
-				"Emulation.setFocusEmulationEnabled",
-				"Emulation.setDeviceMetricsOverride",
-				"Page.navigate",
-				"Runtime.evaluate",
-				"Runtime.evaluate",
-				"Target.closeTarget",
+			want := []string{"Target.createTarget", "Target.attachToTarget"}
+			if state == "rendered" {
+				want = append(want, "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride")
 			}
+			want = append(want, "Page.navigate", "Runtime.evaluate", "Runtime.evaluate", "Target.closeTarget")
 			select {
 			case got := <-observed:
 				if !reflect.DeepEqual(got, want) {

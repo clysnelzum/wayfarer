@@ -230,7 +230,7 @@ func (c Client) Profile(ctx context.Context, slug string) (Profile, error) {
 	v, err := read[struct {
 		Data     Profile `json:"profile"`
 		NotFound bool    `json:"not_found"`
-	}](ctx, c.Reader, "/in/"+slug+"/", profileExpression)
+	}](ctx, renderReader(c.Reader), "/in/"+slug+"/", profileExpression)
 	if err != nil {
 		return Profile{}, err
 	}

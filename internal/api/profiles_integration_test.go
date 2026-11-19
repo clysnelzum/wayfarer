@@ -170,7 +170,12 @@ func TestProfilesAndCompaniesHTTPThroughCDP(t *testing.T) {
 				}
 				defer ws.Close()
 				_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
-				for _, method := range []string{"Target.createTarget", "Target.attachToTarget", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride", "Page.navigate", "Runtime.evaluate", "Target.closeTarget"} {
+				methods := []string{"Target.createTarget", "Target.attachToTarget"}
+				if strings.HasPrefix(tc.apiPath, "/v1/profiles/") {
+					methods = append(methods, "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride")
+				}
+				methods = append(methods, "Page.navigate", "Runtime.evaluate", "Target.closeTarget")
+				for _, method := range methods {
 					var request struct {
 						ID     int
 						Method string

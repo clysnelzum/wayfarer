@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -11,6 +12,26 @@ type readerFunc func(context.Context, string, string) (json.RawMessage, error)
 
 func (f readerFunc) Read(ctx context.Context, pageURL, expression string) (json.RawMessage, error) {
 	return f(ctx, pageURL, expression)
+}
+
+func TestJobDescriptionBlocks(t *testing.T) {
+	for _, blocks := range []string{"", `,"description_blocks":[{"kind":"list","ordered":false,"items":["Go","Kubernetes"]}]`} {
+		c := Client{Reader: readerFunc(func(_ context.Context, raw, expr string) (json.RawMessage, error) {
+			if raw != "https://www.linkedin.com/jobs/view/42/" || !strings.Contains(expr, "job.description_blocks") {
+				t.Fatalf("unexpected job read: %q", raw)
+			}
+			return json.RawMessage(`{"job":{"id":"42","title":"Engineer","description":"Requirements"` + blocks + `}}`), nil
+		})}
+		job, err := c.Job(context.Background(), "42")
+		if err != nil || job.Description != "Requirements" {
+			t.Fatalf("unexpected job: %+v (%v)", job, err)
+		}
+		out, err := json.Marshal(job)
+		if err != nil || strings.Contains(string(out), `"description_blocks"`) != (blocks != "") ||
+			(blocks != "" && !strings.Contains(string(out), `"ordered":false,"items":["Go","Kubernetes"]`)) {
+			t.Fatalf("unexpected job JSON: %s (%v)", out, err)
+		}
+	}
 }
 
 func TestJobsPagination(t *testing.T) {

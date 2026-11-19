@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/clysnelzum/wayfarer/internal/chrome"
@@ -31,6 +32,7 @@ var jobID = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 
 func New(token string, source Source) http.Handler {
 	want := sha256.Sum256([]byte(token))
+	refs := newSourceRefs()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -69,7 +71,27 @@ func New(token string, source Source) http.Handler {
 				fail(w, http.StatusBadRequest, "invalid_query", err.Error())
 				return
 			}
+			ref := query.Get("source_ref")
+			if ref != "" {
+				q.SourceContext = refs.open(ref, q.Source, time.Now())
+				if q.SourceContext == nil {
+					fail(w, http.StatusGone, "recommendation_source_ref_unavailable", "Refresh recommendations to get a new source_ref.")
+					return
+				}
+			}
 			v, err := source.Jobs(ctx, q)
+			if err == nil {
+				now := time.Now()
+				for i := range v.Sections {
+					v.Sections[i].SourceRef = refs.seal(v.Sections[i].SourceContext, now)
+				}
+				if v.Search != nil && v.Search.SourceContext != nil {
+					v.Search.SourceRef = ref
+					if ref == "" {
+						v.Search.SourceRef = refs.seal(v.Search.SourceContext, now)
+					}
+				}
+			}
 			result(w, v, err)
 		case p == "/v1/feed":
 			q, err := parseFeedQuery(query)
@@ -137,7 +159,7 @@ func parseFeedQuery(values url.Values) (linkedin.FeedQuery, error) {
 func parseJobQuery(values url.Values) (linkedin.JobQuery, error) {
 	for key, entries := range values {
 		switch key {
-		case "q", "page", "geo_id", "company_id", "company_ids", "posted_within", "workplace", "experience", "employment_type", "suggested_facet_ids", "easy_apply", "in_network", "verified", "under_10_applicants":
+		case "q", "source", "source_ref", "page", "limit", "geo_id", "geo_ids", "company_id", "company_ids", "posted_within", "workplace", "experience", "employment_type", "suggested_facet_ids", "easy_apply", "in_network", "verified", "under_10_applicants":
 		default:
 			return linkedin.JobQuery{}, errors.New("Unsupported job search parameter.")
 		}
@@ -145,7 +167,18 @@ func parseJobQuery(values url.Values) (linkedin.JobQuery, error) {
 			return linkedin.JobQuery{}, errors.New("Job search parameters must be supplied once and cannot be empty.")
 		}
 	}
-	var q linkedin.JobQuery
+	q := linkedin.JobQuery{Source: values.Get("source")}
+	if values.Has("source_ref") && q.Source == "" {
+		return q, errors.New("source_ref requires source.")
+	}
+	if q.Source != "" {
+		for key := range values {
+			if key != "source" && key != "page" && key != "source_ref" {
+				return q, errors.New("source can only be combined with page and source_ref.")
+			}
+		}
+		q.Page = 1
+	}
 	if _, ok := values["q"]; ok {
 		q.Keywords = strings.TrimSpace(values.Get("q"))
 		if q.Keywords == "" || len(q.Keywords) > 240 || !utf8.ValidString(q.Keywords) {
@@ -154,8 +187,8 @@ func parseJobQuery(values url.Values) (linkedin.JobQuery, error) {
 		q.Page = 1
 	}
 	if _, ok := values["page"]; ok {
-		if q.Keywords == "" {
-			return q, errors.New("page requires a keyword search (q).")
+		if q.Keywords == "" && q.Source == "" {
+			return q, errors.New("page requires q or source.")
 		}
 		page, err := strconv.Atoi(values.Get("page"))
 		if err != nil || page < 1 || page > linkedin.MaxSearchPage {
@@ -163,7 +196,17 @@ func parseJobQuery(values url.Values) (linkedin.JobQuery, error) {
 		}
 		q.Page = page
 	}
-	if q.Keywords == "" && len(values) > 0 {
+	if q.Source != "" {
+		return q, q.Validate()
+	}
+	if _, ok := values["limit"]; ok {
+		limit, err := strconv.Atoi(values.Get("limit"))
+		if err != nil || limit < 1 || limit > linkedin.MaxJobRecommendationLimit {
+			return q, errors.New("limit must be an integer from 1 to " + strconv.Itoa(linkedin.MaxJobRecommendationLimit) + ".")
+		}
+		q.RecommendationLimit = limit
+	}
+	if q.Keywords == "" && len(values) > 0 && !(q.RecommendationLimit > 0 && len(values) == 1) {
 		return q, errors.New("Filters require a keyword search (q).")
 	}
 	for _, key := range []string{"easy_apply", "in_network", "verified", "under_10_applicants"} {
@@ -178,7 +221,7 @@ func parseJobQuery(values url.Values) (linkedin.JobQuery, error) {
 		return strings.Split(values.Get(key), ",")
 	}
 	q.Filters = linkedin.JobFilters{
-		LocationID: values.Get("geo_id"), CompanyID: values.Get("company_id"), CompanyIDs: options("company_ids"), PostedWithin: values.Get("posted_within"),
+		LocationID: values.Get("geo_id"), LocationIDs: options("geo_ids"), CompanyID: values.Get("company_id"), CompanyIDs: options("company_ids"), PostedWithin: values.Get("posted_within"),
 		Workplace: options("workplace"), Experience: options("experience"), Employment: options("employment_type"),
 		SuggestedFacetIDs: options("suggested_facet_ids"),
 		EasyApply:         values.Get("easy_apply") == "true", InNetwork: values.Get("in_network") == "true",
@@ -193,6 +236,8 @@ func result(w http.ResponseWriter, value any, err error) {
 		write(w, http.StatusOK, value)
 	case errors.Is(err, linkedin.ErrSearchMismatch):
 		fail(w, http.StatusBadGateway, "upstream_search_changed", "LinkedIn did not retain the requested job search, page, or filters.")
+	case errors.Is(err, linkedin.ErrJobSourceUnavailable):
+		fail(w, http.StatusNotFound, "recommendation_source_unavailable", "LinkedIn did not show this recommendation source in the current session.")
 	case errors.Is(err, linkedin.ErrNotFound):
 		fail(w, http.StatusNotFound, "job_not_found", "LinkedIn reports that the job is unavailable.")
 	case errors.Is(err, linkedin.ErrProfileNotFound):
