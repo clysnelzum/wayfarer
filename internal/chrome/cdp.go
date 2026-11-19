@@ -3,6 +3,7 @@ package chrome
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -17,7 +18,8 @@ type message struct {
 	Params    any             `json:"params,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Error     *struct {
-		Code int `json:"code"`
+		Code    int    `json:"code"`
+		Message string `json:"message"`
 	} `json:"error,omitempty"`
 }
 
@@ -47,7 +49,11 @@ func newCDP(ws *websocket.Conn) *cdp {
 
 func (c *cdp) stop(err error) {
 	c.once.Do(func() {
-		c.err = fmt.Errorf("%w: %w", ErrDebuggerUnavailable, err)
+		if errors.Is(err, ErrClosed) {
+			c.err = err
+		} else {
+			c.err = fmt.Errorf("%w: %w", ErrDebuggerUnavailable, err)
+		}
 		_ = c.ws.Close()
 		close(c.done)
 	})
@@ -123,10 +129,16 @@ func (c *cdp) call(ctx context.Context, session, method string, params, result a
 
 	decode := func(reply message) error {
 		if reply.Error != nil {
-			return &commandError{method: method, code: reply.Error.Code}
+			return &CommandError{
+				Method:  method,
+				Code:    reply.Error.Code,
+				Message: reply.Error.Message,
+			}
 		}
 		if result != nil {
-			return json.Unmarshal(reply.Result, result)
+			if err := json.Unmarshal(reply.Result, result); err != nil {
+				return fmt.Errorf("decode CDP %s result: %w", method, err)
+			}
 		}
 		return nil
 	}
@@ -147,9 +159,17 @@ func (c *cdp) call(ctx context.Context, session, method string, params, result a
 	}
 }
 
-type commandError struct {
-	method string
-	code   int
+// CommandError describes a protocol error returned by Chrome DevTools Protocol.
+type CommandError struct {
+	Method  string
+	Code    int
+	Message string
 }
 
-func (e *commandError) Error() string { return fmt.Sprintf("CDP %s failed (%d)", e.method, e.code) }
+// Error returns a concise description of the failed CDP command.
+func (e *CommandError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("CDP %s failed (%d): %s", e.Method, e.Code, e.Message)
+	}
+	return fmt.Sprintf("CDP %s failed (%d)", e.Method, e.Code)
+}
