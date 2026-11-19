@@ -3,21 +3,30 @@ package linkedin
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"reflect"
 	"testing"
+
+	"github.com/clysnelzum/wayfarer/internal/linkedin/scripts"
 )
 
 func TestFeedRead(t *testing.T) {
-	c := Client{Reader: readerFunc(func(_ context.Context, pageURL, expression string) (json.RawMessage, error) {
-		if pageURL != base+"/feed/foryou/" || !strings.HasSuffix(expression, ")(8)") {
-			t.Fatal("expected a bounded feed evaluation")
-		}
-		return json.RawMessage(`{"items":[{"id":"example1","text":"Alice, hello","content":"hello","author":{"kind":"person","slug":"alice","name":"Alice","url":"https://www.linkedin.com/in/alice/"}}],"sort":"recent","has_more":true,"load_status":"budget_reached"}`), nil
-	})}
+	provider := &fakeScriptProvider{}
+	c := Client{
+		Scripts: provider,
+		Reader: readerFunc(func(_ context.Context, pageURL, expression string) (json.RawMessage, error) {
+			if pageURL != base+"/feed/foryou/" || expression == "" {
+				t.Fatal("expected a bounded feed evaluation")
+			}
+			return json.RawMessage(`{"items":[{"id":"example1","text":"Alice, hello","content":"hello","author":{"kind":"person","slug":"alice","name":"Alice","url":"https://www.linkedin.com/in/alice/"}}],"sort":"recent","has_more":true,"load_status":"budget_reached"}`), nil
+		}),
+	}
 	v, err := c.Feed(context.Background(), FeedQuery{Limit: 8})
 	if err != nil || len(v.Items) != 1 || v.Items[0].Author == nil || v.Items[0].Author.Slug != "alice" ||
 		v.Items[0].Content != "hello" || !v.HasMore || v.LoadStatus != "budget_reached" {
 		t.Fatalf("unexpected feed result: %+v (%v)", v, err)
+	}
+	if !reflect.DeepEqual(provider.calls, []scriptCall{{id: scripts.ScriptFeed, args: []any{8}}}) {
+		t.Fatalf("unexpected script calls: %+v", provider.calls)
 	}
 }
 

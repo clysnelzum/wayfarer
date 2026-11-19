@@ -1,13 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
+const { loadScript } = require('./helpers/load_script.cjs');
 
-const companyScript = fs.readFileSync(
-  path.join(__dirname, '..', 'internal', 'linkedin', 'company.js'),
-  'utf8',
-);
+const companyScript = loadScript('company.js');
 
 function splitSelectors(selector) {
   const parts = [];

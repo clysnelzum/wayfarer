@@ -1,10 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
+const { loadScript } = require('./helpers/load_script.cjs');
 
-const profileScript = fs.readFileSync(path.join(__dirname, '..', 'internal', 'linkedin', 'profile.js'), 'utf8');
+const profileScript = loadScript('profile.js');
 const plain = value => JSON.parse(JSON.stringify(value));
 
 function splitTopLevel(str, sep) {

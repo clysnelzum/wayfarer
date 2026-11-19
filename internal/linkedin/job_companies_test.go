@@ -3,8 +3,10 @@ package linkedin
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"reflect"
 	"testing"
+
+	"github.com/clysnelzum/wayfarer/internal/linkedin/scripts"
 )
 
 func TestJobCompanyLookup(t *testing.T) {
@@ -21,15 +23,22 @@ func TestJobCompanyLookup(t *testing.T) {
 		{"duplicate IDs", `{"items":[{"id":"1035","name":"Microsoft"},{"id":"1035","name":"Microsoft"}],"status":"suggestions"}`, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := Client{Reader: readerFunc(func(_ context.Context, raw, expr string) (json.RawMessage, error) {
-				if raw != base+jobTypeaheadPath || !strings.Contains(expr, `)("Company \"Name\"", (`) {
-					t.Fatal("expected an encoded query and the fixed job typeahead page")
-				}
-				return json.RawMessage(tc.response), nil
-			})}
+			provider := &fakeScriptProvider{}
+			c := Client{
+				Scripts: provider,
+				Reader: readerFunc(func(_ context.Context, raw, expr string) (json.RawMessage, error) {
+					if raw != base+jobTypeaheadPath || expr == "" {
+						t.Fatal("expected an expression and the fixed job typeahead page")
+					}
+					return json.RawMessage(tc.response), nil
+				}),
+			}
 			got, err := c.JobCompanies(context.Background(), `Company "Name"`)
 			if (err != nil) != tc.wantError || len(got.Items) != tc.wantItems {
 				t.Fatalf("got %+v (%v)", got, err)
+			}
+			if !reflect.DeepEqual(provider.calls, []scriptCall{{id: scripts.ScriptJobCompanies, args: []any{`Company "Name"`}}}) {
+				t.Fatalf("unexpected script calls: %+v", provider.calls)
 			}
 		})
 	}

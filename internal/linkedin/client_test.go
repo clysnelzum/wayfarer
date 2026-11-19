@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/clysnelzum/wayfarer/internal/linkedin/scripts"
 )
 
 type readerFunc func(context.Context, string, string) (json.RawMessage, error)
@@ -14,17 +18,69 @@ func (f readerFunc) Read(ctx context.Context, pageURL, expression string) (json.
 	return f(ctx, pageURL, expression)
 }
 
+type scriptCall struct {
+	id   scripts.ScriptID
+	args []any
+}
+
+type fakeScriptProvider struct {
+	calls []scriptCall
+}
+
+func (f *fakeScriptProvider) record(id scripts.ScriptID, args ...any) (scripts.Invocation, error) {
+	f.calls = append(f.calls, scriptCall{id: id, args: args})
+	return scripts.Invocation{
+		ID:         id,
+		Expression: "() => ({stub: " + strconv.Quote(string(id)) + "})",
+	}, nil
+}
+
+func (f *fakeScriptProvider) Build(id scripts.ScriptID, args ...any) (scripts.Invocation, error) {
+	return f.record(id, args...)
+}
+func (f *fakeScriptProvider) Feed(limit int) (scripts.Invocation, error) {
+	return f.record(scripts.ScriptFeed, limit)
+}
+func (f *fakeScriptProvider) Jobs(limit int, source string) (scripts.Invocation, error) {
+	return f.record(scripts.ScriptJobs, limit, source)
+}
+func (f *fakeScriptProvider) JobDetail() (scripts.Invocation, error) {
+	return f.record(scripts.ScriptJobDetail)
+}
+func (f *fakeScriptProvider) JobLocations(query string) (scripts.Invocation, error) {
+	return f.record(scripts.ScriptJobLocations, query)
+}
+func (f *fakeScriptProvider) JobCompanies(query string) (scripts.Invocation, error) {
+	return f.record(scripts.ScriptJobCompanies, query)
+}
+func (f *fakeScriptProvider) Profile() (scripts.Invocation, error) {
+	return f.record(scripts.ScriptProfile)
+}
+func (f *fakeScriptProvider) Company() (scripts.Invocation, error) {
+	return f.record(scripts.ScriptCompany)
+}
+func (f *fakeScriptProvider) AuthGuard() string {
+	return "() => false"
+}
+
 func TestJobDescriptionBlocks(t *testing.T) {
 	for _, blocks := range []string{"", `,"description_blocks":[{"kind":"list","ordered":false,"items":["Go","Kubernetes"]}]`} {
-		c := Client{Reader: readerFunc(func(_ context.Context, raw, expr string) (json.RawMessage, error) {
-			if raw != "https://www.linkedin.com/jobs/view/42/" || !strings.Contains(expr, "job.description_blocks") {
-				t.Fatalf("unexpected job read: %q", raw)
-			}
-			return json.RawMessage(`{"job":{"id":"42","title":"Engineer","description":"Requirements"` + blocks + `}}`), nil
-		})}
+		provider := &fakeScriptProvider{}
+		c := Client{
+			Scripts: provider,
+			Reader: readerFunc(func(_ context.Context, raw, expr string) (json.RawMessage, error) {
+				if raw != "https://www.linkedin.com/jobs/view/42/" || expr == "" {
+					t.Fatalf("unexpected job read: %q (expr=%q)", raw, expr)
+				}
+				return json.RawMessage(`{"job":{"id":"42","title":"Engineer","description":"Requirements"` + blocks + `}}`), nil
+			}),
+		}
 		job, err := c.Job(context.Background(), "42")
 		if err != nil || job.Description != "Requirements" {
 			t.Fatalf("unexpected job: %+v (%v)", job, err)
+		}
+		if !reflect.DeepEqual(provider.calls, []scriptCall{{id: scripts.ScriptJobDetail}}) {
+			t.Fatalf("unexpected script calls: %+v", provider.calls)
 		}
 		out, err := json.Marshal(job)
 		if err != nil || strings.Contains(string(out), `"description_blocks"`) != (blocks != "") ||

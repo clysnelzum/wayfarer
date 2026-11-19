@@ -1,9 +1,9 @@
-const {readFileSync} = require('node:fs');
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {runInNewContext} = require('node:vm');
+const {loadScript} = require('./helpers/load_script.cjs');
 
-const source = name => readFileSync(require.resolve(`../internal/linkedin/${name}.js`), 'utf8');
+const source = loadScript;
 const origin = 'https://www.linkedin.com';
 const path = '/jobs/view/42/';
 function node(innerText, attrs = {}, selectors = {}) {

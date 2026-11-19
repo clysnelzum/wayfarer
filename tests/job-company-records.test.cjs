@@ -1,10 +1,9 @@
 const assert = require('node:assert/strict');
-const {readFileSync} = require('node:fs');
-const {join} = require('node:path');
 const {test} = require('node:test');
 const vm = require('node:vm');
+const {loadScript} = require('./helpers/load_script.cjs');
 
-const parse = vm.runInNewContext(`(${readFileSync(join(__dirname, '../internal/linkedin/job_company_records.js'), 'utf8')})`);
+const parse = vm.runInNewContext(`(${loadScript('job_company_records.js')})`);
 const run = input => JSON.parse(JSON.stringify(parse(input)));
 const node = (tag, props) => ['$', tag, null, props];
 const col = children => node('div', {'data-component-type': 'LazyColumn', children});
@@ -49,7 +48,7 @@ test('observes only the company response for the typed query and restores fetch'
       return true;
     },
   };
-  const source = readFileSync(join(__dirname, '../internal/linkedin/job_companies.js'), 'utf8');
+  const source = loadScript('job_companies.js');
   const extract = vm.runInNewContext(`(${source})`, {window, location, document, URL, Request, TextDecoder, setTimeout, clearTimeout});
   const observed = [];
   const expected = {items: [], status: 'no_suggestions_observed'};

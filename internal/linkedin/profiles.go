@@ -2,17 +2,10 @@ package linkedin
 
 import (
 	"context"
-	_ "embed"
 	"errors"
 	"regexp"
 	"strings"
 )
-
-//go:embed profile.js
-var profileExpression string
-
-//go:embed company.js
-var companyExpression string
 
 var (
 	ErrProfileNotFound = errors.New("personal profile not found")
@@ -227,10 +220,14 @@ func (c Client) Profile(ctx context.Context, slug string) (Profile, error) {
 	if !ValidSlug(slug) {
 		return Profile{}, errors.New("invalid profile slug")
 	}
+	inv, err := c.scripts().Profile()
+	if err != nil {
+		return Profile{}, err
+	}
 	v, err := read[struct {
 		Data     Profile `json:"profile"`
 		NotFound bool    `json:"not_found"`
-	}](ctx, renderReader(c.Reader), "/in/"+slug+"/", profileExpression)
+	}](ctx, renderReader(c.Reader), "/in/"+slug+"/", inv.Expression)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -251,10 +248,14 @@ func (c Client) Company(ctx context.Context, slug string) (Company, error) {
 	if !ValidSlug(slug) {
 		return Company{}, errors.New("invalid company slug")
 	}
+	inv, err := c.scripts().Company()
+	if err != nil {
+		return Company{}, err
+	}
 	v, err := read[struct {
 		Data     Company `json:"company"`
 		NotFound bool    `json:"not_found"`
-	}](ctx, c.Reader, "/company/"+slug+"/about/", companyExpression)
+	}](ctx, c.Reader, "/company/"+slug+"/about/", inv.Expression)
 	if err != nil {
 		return Company{}, err
 	}

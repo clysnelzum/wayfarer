@@ -17,10 +17,6 @@ var recommendationOrigins = map[string]string{
 	"profile_match": "QUALIFICATION_LANDING",
 }
 
-func jobListScript(limit int, source string) string {
-	return "() => (" + jobsExpression + ")((" + jobCardExpression + "), " + strconv.Itoa(limit) + ", " + strconv.Quote(source) + ")"
-}
-
 // JobSourceContext holds the native parameters for one observed Show all link.
 // It is never sent in cleartext in an API response or accepted from a caller.
 type JobSourceContext struct {
@@ -28,6 +24,10 @@ type JobSourceContext struct {
 }
 
 func (c Client) resolveJobSource(ctx context.Context, source string) (JobSourceContext, error) {
+	inv, err := c.scripts().Jobs(0, source)
+	if err != nil {
+		return JobSourceContext{}, err
+	}
 	reader := c.Reader
 	if source == "profile_match" {
 		reader = renderReader(reader)
@@ -35,7 +35,7 @@ func (c Client) resolveJobSource(ctx context.Context, source string) (JobSourceC
 	link, err := read[struct {
 		JobSourceContext
 		Unavailable bool
-	}](ctx, reader, "/jobs/", jobListScript(0, source))
+	}](ctx, reader, "/jobs/", inv.Expression)
 	if err != nil {
 		return JobSourceContext{}, err
 	}

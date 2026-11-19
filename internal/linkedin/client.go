@@ -2,29 +2,14 @@ package linkedin
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"time"
+
+	"github.com/clysnelzum/wayfarer/internal/linkedin/scripts"
 )
-
-//go:embed jobs.js
-var jobsExpression string
-
-//go:embed job.js
-var jobExpression string
-
-//go:embed job_description.js
-var jobDescriptionExpression string
-
-//go:embed job_cards.js
-var jobCardExpression string
-
-func jobScript(extractor string) string {
-	return "() => (" + extractor + ")((" + jobCardExpression + "))"
-}
 
 const base = "https://www.linkedin.com"
 
@@ -34,7 +19,17 @@ type Reader interface {
 	Read(ctx context.Context, pageURL, expression string) (json.RawMessage, error)
 }
 
-type Client struct{ Reader Reader }
+type Client struct {
+	Reader  Reader
+	Scripts scripts.Provider
+}
+
+func (c Client) scripts() scripts.Provider {
+	if c.Scripts != nil {
+		return c.Scripts
+	}
+	return scripts.DefaultRegistry()
+}
 
 type pageReadFunc func(context.Context, string, string) (json.RawMessage, error)
 
@@ -194,6 +189,10 @@ func (c Client) Jobs(ctx context.Context, q JobQuery) (JobResults, error) {
 	if q.RecommendationLimit > 0 {
 		reader = renderReader(reader)
 	}
+	inv, err := c.scripts().Jobs(q.RecommendationLimit, "")
+	if err != nil {
+		return JobResults{}, err
+	}
 	type upstreamSection struct {
 		JobSection
 		Context *JobSourceContext `json:"source_context"`
@@ -206,7 +205,7 @@ func (c Client) Jobs(ctx context.Context, q JobQuery) (JobResults, error) {
 		QueryEvidence        url.Values        `json:"query_evidence"`
 		RecommendationStatus string            `json:"recommendation_status"`
 		JobSearchInfo
-	}](ctx, reader, path, jobListScript(q.RecommendationLimit, ""))
+	}](ctx, reader, path, inv.Expression)
 	if err != nil {
 		return JobResults{}, err
 	}
@@ -294,10 +293,14 @@ func (c Client) Jobs(ctx context.Context, q JobQuery) (JobResults, error) {
 }
 
 func (c Client) Job(ctx context.Context, id string) (Job, error) {
+	inv, err := c.scripts().JobDetail()
+	if err != nil {
+		return Job{}, err
+	}
 	v, err := read[struct {
 		Job      Job  `json:"job"`
 		NotFound bool `json:"not_found"`
-	}](ctx, c.Reader, "/jobs/view/"+id+"/", "() => ("+jobExpression+")(("+jobCardExpression+"), ("+jobDescriptionExpression+"))")
+	}](ctx, c.Reader, "/jobs/view/"+id+"/", inv.Expression)
 	if err != nil {
 		return Job{}, err
 	}

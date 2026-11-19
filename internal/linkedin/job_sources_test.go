@@ -5,40 +5,54 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/clysnelzum/wayfarer/internal/linkedin/scripts"
 )
 
 func TestJobSourceFollowsNativePagingContext(t *testing.T) {
 	for _, page := range []int{1, 2} {
 		calls := 0
-		c := Client{Reader: readerFunc(func(_ context.Context, raw, expr string) (json.RawMessage, error) {
-			calls++
-			if calls == 1 {
-				if raw != base+"/jobs/" || !strings.HasSuffix(expr, `, 0, "preferences")`) {
-					t.Fatalf("expected the native preferences link to be resolved first: %s", raw)
+		provider := &fakeScriptProvider{}
+		c := Client{
+			Scripts: provider,
+			Reader: readerFunc(func(_ context.Context, raw, expr string) (json.RawMessage, error) {
+				calls++
+				if calls == 1 {
+					if raw != base+"/jobs/" || expr == "" {
+						t.Fatalf("expected the native preferences link to be resolved first: %s", raw)
+					}
+					return json.RawMessage(`{"source":"preferences","origin":"JobSearchOrigin_PREFERENCES_LANDING","keywords":"DevOps or Software Engineer","locations":"90009872,101220015","seed":"101,102"}`), nil
 				}
-				return json.RawMessage(`{"source":"preferences","origin":"JobSearchOrigin_PREFERENCES_LANDING","keywords":"DevOps or Software Engineer","locations":"90009872,101220015","seed":"101,102"}`), nil
-			}
-			u, err := url.Parse(raw)
-			if err != nil {
-				t.Fatal(err)
-			}
-			args := u.Query()
-			if u.Path != "/jobs/search-results/" || args.Get("keywords") != "DevOps or Software Engineer" || args.Get("geoId") != "90009872,101220015" {
-				t.Fatalf("expected native search controls, got %s", raw)
-			}
-			if page == 1 && (args.Get("originToLandingJobPostings") != "101,102" || args.Has("start")) ||
-				page == 2 && (args.Has("originToLandingJobPostings") || args.Get("start") != "25") {
-				t.Fatalf("unexpected pagination: %s", raw)
-			}
-			args.Set("origin", "PREFERENCES_LANDING") // Upstream normalizes its display name.
-			return json.Marshal(map[string]any{"page": page, "items": []JobSummary{}, "match_mode": "no_results", "query_evidence": args})
-		})}
+				u, err := url.Parse(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				args := u.Query()
+				if u.Path != "/jobs/search-results/" || args.Get("keywords") != "DevOps or Software Engineer" || args.Get("geoId") != "90009872,101220015" {
+					t.Fatalf("expected native search controls, got %s", raw)
+				}
+				if page == 1 && (args.Get("originToLandingJobPostings") != "101,102" || args.Has("start")) ||
+					page == 2 && (args.Has("originToLandingJobPostings") || args.Get("start") != "25") {
+					t.Fatalf("unexpected pagination: %s", raw)
+				}
+				args.Set("origin", "PREFERENCES_LANDING") // Upstream normalizes its display name.
+				return json.Marshal(map[string]any{"page": page, "items": []JobSummary{}, "match_mode": "no_results", "query_evidence": args})
+			}),
+		}
 		got, err := c.Jobs(context.Background(), JobQuery{Source: "preferences", Page: page})
 		if err != nil || calls != 2 || got.Search == nil || got.Search.Source != "preferences" || got.Pagination.Page != page {
 			t.Fatalf("unexpected result %+v, %d reads, error %v", got, calls, err)
+		}
+		wantCalls := []scriptCall{
+			{id: scripts.ScriptJobs, args: []any{0, "preferences"}},
+			{id: scripts.ScriptJobs, args: []any{0, ""}},
+		}
+		if !reflect.DeepEqual(provider.calls, wantCalls) {
+			t.Fatalf("unexpected script calls: %+v", provider.calls)
 		}
 		wire, err := json.Marshal(got)
 		if err != nil || strings.Contains(string(wire), "101,102") || strings.Contains(string(wire), "DevOps") {

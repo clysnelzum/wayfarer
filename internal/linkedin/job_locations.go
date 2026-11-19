@@ -2,16 +2,11 @@ package linkedin
 
 import (
 	"context"
-	_ "embed"
-	"encoding/json"
 	"errors"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
-
-//go:embed job_locations.js
-var jobLocationsExpression string
 
 type JobLocations struct {
 	Items  []JobLocation `json:"items"`
@@ -40,12 +35,11 @@ func (c Client) JobLocations(ctx context.Context, q string) (JobLocations, error
 	if !ValidLocationQuery(q) {
 		return JobLocations{}, errors.New("invalid location query")
 	}
-	query, err := json.Marshal(q)
+	inv, err := c.scripts().JobLocations(q)
 	if err != nil {
 		return JobLocations{}, err
 	}
-	expr := "() => (" + jobLocationsExpression + ")(" + string(query) + ")"
-	v, err := read[JobLocations](ctx, c.Reader, jobTypeaheadPath, expr)
+	v, err := read[JobLocations](ctx, c.Reader, jobTypeaheadPath, inv.Expression)
 	if err != nil {
 		return JobLocations{}, err
 	}

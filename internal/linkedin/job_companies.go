@@ -2,17 +2,9 @@ package linkedin
 
 import (
 	"context"
-	_ "embed"
-	"encoding/json"
 	"errors"
 	"strings"
 )
-
-//go:embed job_companies.js
-var jobCompaniesExpression string
-
-//go:embed job_company_records.js
-var jobCompanyRecordsExpression string
 
 type JobCompanies struct {
 	Items  []JobCompany `json:"items"`
@@ -33,12 +25,11 @@ func (c Client) JobCompanies(ctx context.Context, q string) (JobCompanies, error
 	if !ValidJobCompanyQuery(q) {
 		return JobCompanies{}, errors.New("invalid company query")
 	}
-	query, err := json.Marshal(q)
+	inv, err := c.scripts().JobCompanies(q)
 	if err != nil {
 		return JobCompanies{}, err
 	}
-	expr := "() => (" + jobCompaniesExpression + ")(" + string(query) + ", (" + jobCompanyRecordsExpression + "))"
-	v, err := read[JobCompanies](ctx, c.Reader, jobTypeaheadPath, expr)
+	v, err := read[JobCompanies](ctx, c.Reader, jobTypeaheadPath, inv.Expression)
 	if err != nil {
 		return JobCompanies{}, err
 	}

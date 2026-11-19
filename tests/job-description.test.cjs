@@ -1,9 +1,9 @@
-const {readFileSync} = require('node:fs');
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {runInNewContext} = require('node:vm');
+const {loadScript} = require('./helpers/load_script.cjs');
 
-const parse = runInNewContext(readFileSync(require.resolve('../internal/linkedin/job_description.js'), 'utf8'));
+const parse = runInNewContext(loadScript('job_description.js'));
 const text = textContent => ({nodeType: 3, textContent});
 function element(tagName, ...childNodes) {
   const children = childNodes.filter(node => node.nodeType === 1);

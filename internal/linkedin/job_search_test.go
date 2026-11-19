@@ -7,31 +7,36 @@ import (
 	"net/url"
 	"reflect"
 	"strconv"
-	"strings"
 	"testing"
+
+	"github.com/clysnelzum/wayfarer/internal/linkedin/scripts"
 )
 
 func TestJobFiltersAndBroadenedResults(t *testing.T) {
-	c := Client{Reader: readerFunc(func(_ context.Context, raw, expression string) (json.RawMessage, error) {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := url.Values{
-			"keywords": {"DevOps & Cloud"}, "start": {"25"}, "geoId": {"90009870"}, "f_C": {"14226"}, "f_TPR": {"r604800"},
-			"f_SAL": {"f_SA_id_225001:272001,1621001$f_SA_id_227001:277001$f_SA_id_226001:272015"},
-			"f_AL":  {"true"}, "f_VJ": {"true"}, "f_JIYN": {"true"}, "f_EA": {"true"},
-		}
-		if u.Path != "/jobs/search-results/" || !reflect.DeepEqual(u.Query(), want) || !strings.Contains(expression, "job-card-component-ref-") {
-			t.Fatalf("unexpected request: %s", raw)
-		}
-		return json.Marshal(map[string]any{
-			"items": []JobSummary{{ID: "42", Workplace: "hybrid", CompensationLabel: "180K USD/yr - 225K USD/yr", BenefitsLabel: "1 prestación", NetworkLabel: "5 antiguos alumnos trabajan aquí"}},
-			"page":  2, "has_more": false,
-			"match_mode": "broadened", "result_count": 3, "result_count_qualifier": "exact", "location_label": "Greater Buenos Aires",
-			"notice": "We couldn't find exact matches", "query_evidence": u.Query(), "selected_job_id": "42",
-		})
-	})}
+	provider := &fakeScriptProvider{}
+	c := Client{
+		Scripts: provider,
+		Reader: readerFunc(func(_ context.Context, raw, expression string) (json.RawMessage, error) {
+			u, err := url.Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := url.Values{
+				"keywords": {"DevOps & Cloud"}, "start": {"25"}, "geoId": {"90009870"}, "f_C": {"14226"}, "f_TPR": {"r604800"},
+				"f_SAL": {"f_SA_id_225001:272001,1621001$f_SA_id_227001:277001$f_SA_id_226001:272015"},
+				"f_AL":  {"true"}, "f_VJ": {"true"}, "f_JIYN": {"true"}, "f_EA": {"true"},
+			}
+			if u.Path != "/jobs/search-results/" || !reflect.DeepEqual(u.Query(), want) || expression == "" {
+				t.Fatalf("unexpected request: %s (expr=%q)", raw, expression)
+			}
+			return json.Marshal(map[string]any{
+				"items": []JobSummary{{ID: "42", Workplace: "hybrid", CompensationLabel: "180K USD/yr - 225K USD/yr", BenefitsLabel: "1 prestación", NetworkLabel: "5 antiguos alumnos trabajan aquí"}},
+				"page":  2, "has_more": false,
+				"match_mode": "broadened", "result_count": 3, "result_count_qualifier": "exact", "location_label": "Greater Buenos Aires",
+				"notice": "We couldn't find exact matches", "query_evidence": u.Query(), "selected_job_id": "42",
+			})
+		}),
+	}
 	q := JobQuery{Keywords: "DevOps & Cloud", Page: 2, Filters: JobFilters{
 		LocationID: "90009870", CompanyID: "14226", PostedWithin: "week", Workplace: []string{"remote", "hybrid"},
 		Experience: []string{"senior"}, Employment: []string{"full_time"}, EasyApply: true, InNetwork: true, Verified: true, Under10: true,
@@ -40,6 +45,9 @@ func TestJobFiltersAndBroadenedResults(t *testing.T) {
 	if err != nil || v.Search == nil || v.Search.MatchMode != "broadened" || v.Search.ResultCount == nil || *v.Search.ResultCount != 3 ||
 		len(v.Items) != 1 || v.Items[0].Workplace != "hybrid" || v.Search.Notice == "" || v.Search.SelectedJobID != "42" {
 		t.Fatalf("unexpected filtered response: %+v (%v)", v, err)
+	}
+	if !reflect.DeepEqual(provider.calls, []scriptCall{{id: scripts.ScriptJobs, args: []any{0, ""}}}) {
+		t.Fatalf("unexpected script calls: %+v", provider.calls)
 	}
 	card := v.Items[0]
 	if card.CompensationLabel != "180K USD/yr - 225K USD/yr" || card.BenefitsLabel != "1 prestación" || card.NetworkLabel != "5 antiguos alumnos trabajan aquí" {
@@ -213,15 +221,22 @@ func TestJobRecommendationsLimit(t *testing.T) {
 		{30, "", true},
 		{25, "limit_reached", true},
 	} {
-		c := Client{Reader: readerFunc(func(_ context.Context, raw, expression string) (json.RawMessage, error) {
-			if raw != base+"/jobs/" || !strings.HasSuffix(expression, ", "+strconv.Itoa(tc.limit)+`, "")`) {
-				t.Fatalf("expected the limit only in the browser extractor, not in the navigation URL")
-			}
-			return json.Marshal(JobResults{Items: items, RecommendationStatus: tc.status})
-		})}
+		provider := &fakeScriptProvider{}
+		c := Client{
+			Scripts: provider,
+			Reader: readerFunc(func(_ context.Context, raw, expression string) (json.RawMessage, error) {
+				if raw != base+"/jobs/" || expression == "" {
+					t.Fatalf("expected the limit only in the browser extractor, not in the navigation URL: %s", raw)
+				}
+				return json.Marshal(JobResults{Items: items, RecommendationStatus: tc.status})
+			}),
+		}
 		v, err := c.Jobs(context.Background(), JobQuery{RecommendationLimit: tc.limit})
 		if (err != nil) != tc.wantErr || !tc.wantErr && v.RecommendationStatus != tc.status {
 			t.Fatalf("limit=%d status=%q: got %q (%v)", tc.limit, tc.status, v.RecommendationStatus, err)
+		}
+		if !reflect.DeepEqual(provider.calls, []scriptCall{{id: scripts.ScriptJobs, args: []any{tc.limit, ""}}}) {
+			t.Fatalf("unexpected script calls: %+v", provider.calls)
 		}
 	}
 }
@@ -251,28 +266,42 @@ func TestMultipleJobSearchLocations(t *testing.T) {
 }
 
 func TestJobLocationLookup(t *testing.T) {
-	c := Client{Reader: readerFunc(func(_ context.Context, raw, expression string) (json.RawMessage, error) {
-		if raw != base+"/jobs/search-results/?keywords=jobs" || !strings.HasSuffix(expression, `)("Côte d'Azur \"France\"")`) {
-			t.Fatal("expected the location query to be encoded as a JS string literal")
-		}
-		return json.RawMessage(`{"items":[{"id":"90009870","name":"Greater Buenos Aires"}],"status":"suggestions"}`), nil
-	})}
+	provider := &fakeScriptProvider{}
+	c := Client{
+		Scripts: provider,
+		Reader: readerFunc(func(_ context.Context, raw, expression string) (json.RawMessage, error) {
+			if raw != base+"/jobs/search-results/?keywords=jobs" || expression == "" {
+				t.Fatal("expected a non-empty expression and the fixed job typeahead page")
+			}
+			return json.RawMessage(`{"items":[{"id":"90009870","name":"Greater Buenos Aires"}],"status":"suggestions"}`), nil
+		}),
+	}
 	v, err := c.JobLocations(context.Background(), `Côte d'Azur "France"`)
 	if err != nil || len(v.Items) != 1 || v.Items[0].ID != "90009870" {
 		t.Fatalf("unexpected location lookup: %+v (%v)", v, err)
 	}
+	if !reflect.DeepEqual(provider.calls, []scriptCall{{id: scripts.ScriptJobLocations, args: []any{`Côte d'Azur "France"`}}}) {
+		t.Fatalf("unexpected script calls: %+v", provider.calls)
+	}
 }
 
 func TestJobDetailKeepsApplicationUnits(t *testing.T) {
-	c := Client{Reader: readerFunc(func(_ context.Context, raw, expression string) (json.RawMessage, error) {
-		if raw != base+"/jobs/view/42/" || !strings.Contains(expression, jobExpression) {
-			t.Fatal("expected the job detail extractor")
-		}
-		return json.RawMessage(`{"job":{"id":"42","title":"Engineer","company":"ACME","description":"Cloud","apply_method":"external","application_activity":{"kind":"apply_clicks","count":100,"qualifier":"more_than"},"saved":false,"related_jobs":[{"id":"17","title":"DevOps"}]}}`), nil
-	})}
+	provider := &fakeScriptProvider{}
+	c := Client{
+		Scripts: provider,
+		Reader: readerFunc(func(_ context.Context, raw, expression string) (json.RawMessage, error) {
+			if raw != base+"/jobs/view/42/" || expression == "" {
+				t.Fatal("expected the job detail extractor")
+			}
+			return json.RawMessage(`{"job":{"id":"42","title":"Engineer","company":"ACME","description":"Cloud","apply_method":"external","application_activity":{"kind":"apply_clicks","count":100,"qualifier":"more_than"},"saved":false,"related_jobs":[{"id":"17","title":"DevOps"}]}}`), nil
+		}),
+	}
 	v, err := c.Job(context.Background(), "42")
 	if err != nil || v.ApplyMethod != "external" || v.ApplicationActivity == nil || v.ApplicationActivity.Kind != "apply_clicks" ||
 		v.ApplicationActivity.Count != 100 || v.ApplicationActivity.Qualifier != "more_than" || v.Saved == nil || *v.Saved || len(v.RelatedJobs) != 1 {
 		t.Fatalf("unexpected job detail: %+v (%v)", v, err)
+	}
+	if !reflect.DeepEqual(provider.calls, []scriptCall{{id: scripts.ScriptJobDetail}}) {
+		t.Fatalf("unexpected script calls: %+v", provider.calls)
 	}
 }

@@ -1,10 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
+const { loadScript } = require('./helpers/load_script.cjs');
 
-const script = name => fs.readFileSync(path.join(__dirname, '..', 'internal', 'linkedin', name), 'utf8');
+const script = loadScript;
 const plain = value => JSON.parse(JSON.stringify(value));
 const visible = node => node.getClientRects().length > 0;
 const jobCards = '[componentkey^="job-card-component-ref-"]';

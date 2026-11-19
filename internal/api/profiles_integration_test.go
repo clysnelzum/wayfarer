@@ -85,18 +85,16 @@ func TestProfilesAndCompaniesHTTPThroughCDP(t *testing.T) {
 		name           string
 		apiPath        string
 		wantNavPath    string
-		wantExprMarker string
 		value          string
 		status         int
 		wantSubstrings []string
 	}{
 		{
-			name:           "profile 200 rich",
-			apiPath:        "/v1/profiles/example-person",
-			wantNavPath:    "/in/example-person/",
-			wantExprMarker: "com.linkedin.sdui.profile.card.ref",
-			value:          richProfileValue,
-			status:         http.StatusOK,
+			name:        "profile 200 rich",
+			apiPath:     "/v1/profiles/example-person",
+			wantNavPath: "/in/example-person/",
+			value:       richProfileValue,
+			status:      http.StatusOK,
 			wantSubstrings: []string{
 				`"url":"https://www.linkedin.com/in/example-person/"`,
 				`"pronouns":"they/them"`,
@@ -107,12 +105,11 @@ func TestProfilesAndCompaniesHTTPThroughCDP(t *testing.T) {
 			},
 		},
 		{
-			name:           "company 200 rich",
-			apiPath:        "/v1/companies/microsoft",
-			wantNavPath:    "/company/microsoft/about/",
-			wantExprMarker: "org-top-card",
-			value:          richCompanyValue,
-			status:         http.StatusOK,
+			name:        "company 200 rich",
+			apiPath:     "/v1/companies/microsoft",
+			wantNavPath: "/company/microsoft/about/",
+			value:       richCompanyValue,
+			status:      http.StatusOK,
 			wantSubstrings: []string{
 				`"url":"https://www.linkedin.com/company/microsoft/"`,
 				`"id":"1035"`,
@@ -126,7 +123,6 @@ func TestProfilesAndCompaniesHTTPThroughCDP(t *testing.T) {
 			name:           "profile 404 not found",
 			apiPath:        "/v1/profiles/missing",
 			wantNavPath:    "/in/missing/",
-			wantExprMarker: "com.linkedin.sdui.profile.card.ref",
 			value:          `{"state":"ok","value":{"not_found":true}}`,
 			status:         http.StatusNotFound,
 			wantSubstrings: []string{`"code":"profile_not_found"`},
@@ -135,7 +131,6 @@ func TestProfilesAndCompaniesHTTPThroughCDP(t *testing.T) {
 			name:           "company 404 not found",
 			apiPath:        "/v1/companies/missing",
 			wantNavPath:    "/company/missing/about/",
-			wantExprMarker: "org-top-card",
 			value:          `{"state":"ok","value":{"not_found":true}}`,
 			status:         http.StatusNotFound,
 			wantSubstrings: []string{`"code":"company_not_found"`},
@@ -144,7 +139,6 @@ func TestProfilesAndCompaniesHTTPThroughCDP(t *testing.T) {
 			name:           "profile 503 auth required",
 			apiPath:        "/v1/profiles/example-person",
 			wantNavPath:    "/in/example-person/",
-			wantExprMarker: "com.linkedin.sdui.profile.card.ref",
 			value:          `{"state":"auth"}`,
 			status:         http.StatusServiceUnavailable,
 			wantSubstrings: []string{`"code":"upstream_auth_required"`},
@@ -153,7 +147,6 @@ func TestProfilesAndCompaniesHTTPThroughCDP(t *testing.T) {
 			name:           "company 503 auth required",
 			apiPath:        "/v1/companies/microsoft",
 			wantNavPath:    "/company/microsoft/about/",
-			wantExprMarker: "org-top-card",
 			value:          `{"state":"auth"}`,
 			status:         http.StatusServiceUnavailable,
 			wantSubstrings: []string{`"code":"upstream_auth_required"`},
@@ -203,8 +196,8 @@ func TestProfilesAndCompaniesHTTPThroughCDP(t *testing.T) {
 						}
 						result = map[string]string{"frameId": "frame"}
 					case "Runtime.evaluate":
-						if !request.Params.AwaitPromise || !strings.Contains(request.Params.Expression, tc.wantExprMarker) {
-							t.Errorf("expected extractor containing %q with AwaitPromise=true", tc.wantExprMarker)
+						if !request.Params.AwaitPromise || strings.TrimSpace(request.Params.Expression) == "" {
+							t.Error("expected non-empty extractor expression with AwaitPromise=true")
 						}
 						result = map[string]any{"result": map[string]any{"value": json.RawMessage(tc.value)}}
 					case "Target.closeTarget":

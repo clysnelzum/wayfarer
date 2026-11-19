@@ -2,13 +2,8 @@ package linkedin
 
 import (
 	"context"
-	_ "embed"
 	"errors"
-	"fmt"
 )
-
-//go:embed feed.js
-var feedExpression string
 
 const MaxFeedLimit = 30
 
@@ -61,9 +56,11 @@ func (c Client) Feed(ctx context.Context, q FeedQuery) (FeedResults, error) {
 	if q.Limit < 0 || q.Limit > MaxFeedLimit {
 		return FeedResults{}, errors.New("feed limit out of range")
 	}
-	// Only the validated integer is formatted into the compiled extractor.
-	expr := fmt.Sprintf("() => (%s)(%d)", feedExpression, q.Limit)
-	result, err := read[FeedResults](ctx, c.Reader, "/feed/foryou/", expr)
+	inv, err := c.scripts().Feed(q.Limit)
+	if err != nil {
+		return FeedResults{}, err
+	}
+	result, err := read[FeedResults](ctx, c.Reader, "/feed/foryou/", inv.Expression)
 	if err != nil {
 		return FeedResults{}, err
 	}
