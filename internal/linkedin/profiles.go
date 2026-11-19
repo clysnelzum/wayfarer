@@ -25,11 +25,9 @@ func (c *Client) Profile(ctx context.Context, slug string) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	wire, err := readWire[wireProfileResponse](ctx, c, true, "profile", "/in/"+slug+"/", inv.Expression)
-	if err != nil {
-		return Profile{}, err
-	}
-	return wire.toDomain(slug, c.baseURL)
+	return readWireDomain(ctx, c, true, "profile", "/in/"+slug+"/", inv.Expression, func(wire wireProfileResponse) (Profile, error) {
+		return wire.toDomain(slug, c.baseURL)
+	})
 }
 
 // Company reads a LinkedIn organization's About page and sidebar details for slug.
@@ -44,9 +42,7 @@ func (c *Client) Company(ctx context.Context, slug string) (Company, error) {
 	if err != nil {
 		return Company{}, err
 	}
-	wire, err := readWire[wireCompanyResponse](ctx, c, false, "company", "/company/"+slug+"/about/", inv.Expression)
-	if err != nil {
-		return Company{}, err
-	}
-	return wire.toDomain(slug, c.baseURL)
+	return readWireDomain(ctx, c, false, "company", "/company/"+slug+"/about/", inv.Expression, func(wire wireCompanyResponse) (Company, error) {
+		return wire.toDomain(slug, c.baseURL)
+	})
 }

@@ -5,15 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/clysnelzum/wayfarer/internal/linkedin"
 )
-
-var jobIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 
 type handler struct {
 	service Service
@@ -110,7 +107,7 @@ func (h *handler) handleJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if !jobIDPattern.MatchString(id) {
+	if !linkedin.ValidJobID(id) {
 		writeError(w, h.logger, http.StatusBadRequest, "invalid_job_id", "Expected a numeric job ID.")
 		return
 	}

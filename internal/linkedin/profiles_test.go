@@ -119,7 +119,7 @@ func TestCompanyRichFieldsAndValidation(t *testing.T) {
 		"neg-members":     `{"company":{"slug":"neg-members","name":"Neg","associated_members_count":-1}}`,
 		"neg-followers":   `{"company":{"slug":"neg-followers","name":"Neg","followers_count":-5}}`,
 		"neg-locations":   `{"company":{"slug":"neg-locations","name":"Neg","locations_count":-2}}`,
-		"bad-website":     `{"company":{"slug":"bad-website","name":"Web","website":"/relative"}}`,
+		"bad-logo":        `{"company":{"slug":"bad-logo","name":"Logo","logo_url":"/relative"}}`,
 		"empty-wp-title":  `{"company":{"slug":"empty-wp-title","name":"WP","workplace_policy":{"title":"  "}}}`,
 		"empty-commit":    `{"company":{"slug":"empty-commit","name":"Commit","commitments":[{"title":""}]}}`,
 		"empty-location":  `{"company":{"slug":"empty-location","name":"Loc","locations":[{"is_headquarters":true}]}}`,
@@ -215,7 +215,7 @@ func TestProfileRichFieldsAndValidation(t *testing.T) {
 	}}`
 	invalidPayloads := map[string]string{
 		"neg-followers":       `{"profile":{"slug":"neg-followers","name":"Neg","followers_count":-1}}`,
-		"bad-website":         `{"profile":{"slug":"bad-website","name":"Web","website":"javascript:alert(1)"}}`,
+		"bad-profile-image":   `{"profile":{"slug":"bad-profile-image","name":"Img","profile_image_url":"javascript:alert(1)"}}`,
 		"empty-featured":      `{"profile":{"slug":"empty-featured","name":"Feat","featured":[{"type":"Post"}]}}`,
 		"empty-activity":      `{"profile":{"slug":"empty-activity","name":"Act","activity":[{"published_label":"1d"}]}}`,
 		"empty-exp-title":     `{"profile":{"slug":"empty-exp-title","name":"Exp","experience":[{"company":"Acme"}]}}`,
@@ -286,5 +286,82 @@ func TestProfileRichFieldsAndValidation(t *testing.T) {
 			_, err := c.Profile(ctx, slug)
 			assertContractError(t, err)
 		})
+	}
+}
+
+func TestProfileAndCompanyOptionalExternalURLs(t *testing.T) {
+	profilePayload := `{"profile":{
+		"slug":"example-person",
+		"name":"Example Person",
+		"website":"https://example.com/?discount=50%",
+		"featured":[
+			{"title":"Bad link","type":"Link","url":"https://example.com/50%"},
+			{"title":"Good link","type":"Link","url":"  https://example.com/good  "}
+		],
+		"certifications":[
+			{"name":"Cert A","credential_url":"https://example.com/?discount=50%"},
+			{"name":"Cert B","credential_url":"https://certs.example.com/123"}
+		],
+		"projects":[
+			{"title":"Proj A","url":"/relative"},
+			{"title":"Proj B","url":"https://projects.example.com/b"}
+		],
+		"publications":[
+			{"title":"Pub A","url":"javascript:alert(1)"},
+			{"title":"Pub B","url":"https://pubs.example.com/b"}
+		]
+	}}`
+	companyPayload := `{"company":{
+		"slug":"example-co",
+		"name":"Example Co",
+		"website":"https://example.com/?discount=50%",
+		"locations":[
+			{"label":"HQ","address":"123 Main St","map_url":"https://example.com/?discount=50%"},
+			{"label":"Branch","address":"456 Side St","map_url":"  https://maps.example.com/branch  "}
+		]
+	}}`
+
+	c := mustNewClient(t, readerFunc(func(_ context.Context, pageURL, _ string) (json.RawMessage, error) {
+		switch pageURL {
+		case defaultBaseURL + "/in/example-person/":
+			return json.RawMessage(profilePayload), nil
+		case defaultBaseURL + "/company/example-co/about/":
+			return json.RawMessage(companyPayload), nil
+		default:
+			t.Fatalf("unexpected upstream query %q", pageURL)
+			return nil, nil
+		}
+	}))
+
+	ctx := context.Background()
+	p, err := c.Profile(ctx, "example-person")
+	if err != nil {
+		t.Fatalf("expected profile with malformed optional external URLs to succeed, got: %v", err)
+	}
+	if p.Website != "" {
+		t.Fatalf("expected malformed profile website to be omitted, got %q", p.Website)
+	}
+	if len(p.Featured) != 2 || p.Featured[0].URL != "" || p.Featured[1].URL != "https://example.com/good" {
+		t.Fatalf("unexpected featured items: %+v", p.Featured)
+	}
+	if len(p.Certifications) != 2 || p.Certifications[0].CredentialURL != "" || p.Certifications[1].CredentialURL != "https://certs.example.com/123" {
+		t.Fatalf("unexpected certifications: %+v", p.Certifications)
+	}
+	if len(p.Projects) != 2 || p.Projects[0].URL != "" || p.Projects[1].URL != "https://projects.example.com/b" {
+		t.Fatalf("unexpected projects: %+v", p.Projects)
+	}
+	if len(p.Publications) != 2 || p.Publications[0].URL != "" || p.Publications[1].URL != "https://pubs.example.com/b" {
+		t.Fatalf("unexpected publications: %+v", p.Publications)
+	}
+
+	co, err := c.Company(ctx, "example-co")
+	if err != nil {
+		t.Fatalf("expected company with malformed optional external URLs to succeed, got: %v", err)
+	}
+	if co.Website != "" {
+		t.Fatalf("expected malformed company website to be omitted, got %q", co.Website)
+	}
+	if len(co.Locations) != 2 || co.Locations[0].MapURL != "" || co.Locations[1].MapURL != "https://maps.example.com/branch" {
+		t.Fatalf("unexpected company locations: %+v", co.Locations)
 	}
 }

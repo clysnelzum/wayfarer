@@ -23,7 +23,7 @@ func (c *Client) Jobs(ctx context.Context, query JobQuery) (JobResults, error) {
 		if query.SourceContext != "" {
 			link, err = decodeSourceContext(query.SourceContext, query.Source)
 			if err != nil {
-				return JobResults{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+				return JobResults{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 			}
 		} else {
 			resolveCtx, cancel := context.WithTimeout(ctx, 26*time.Second)
@@ -45,11 +45,9 @@ func (c *Client) Jobs(ctx context.Context, query JobQuery) (JobResults, error) {
 		return JobResults{}, err
 	}
 	rendered := query.RecommendationLimit > 0
-	wire, err := readWire[wireJobsResponse](ctx, c, rendered, "jobs", path, inv.Expression)
-	if err != nil {
-		return JobResults{}, err
-	}
-	return wire.toDomain(query, path, resolvedSourceCtx)
+	return readWireDomain(ctx, c, rendered, "jobs", path, inv.Expression, func(wire wireJobsResponse) (JobResults, error) {
+		return wire.toDomain(query, path, resolvedSourceCtx)
+	})
 }
 
 // Job reads full posting details for a single numeric LinkedIn job ID.
@@ -64,9 +62,7 @@ func (c *Client) Job(ctx context.Context, id string) (Job, error) {
 	if err != nil {
 		return Job{}, err
 	}
-	wire, err := readWire[wireJobResponse](ctx, c, false, "job", "/jobs/view/"+id+"/", inv.Expression)
-	if err != nil {
-		return Job{}, err
-	}
-	return wire.toDomain(id, c.baseURL)
+	return readWireDomain(ctx, c, false, "job", "/jobs/view/"+id+"/", inv.Expression, func(wire wireJobResponse) (Job, error) {
+		return wire.toDomain(id, c.baseURL)
+	})
 }

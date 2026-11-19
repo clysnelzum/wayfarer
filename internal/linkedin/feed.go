@@ -19,9 +19,7 @@ func (c *Client) Feed(ctx context.Context, limit int) (FeedResults, error) {
 	if err != nil {
 		return FeedResults{}, err
 	}
-	wire, err := readWire[wireFeedResults](ctx, c, false, "feed", "/feed/foryou/", inv.Expression)
-	if err != nil {
-		return FeedResults{}, err
-	}
-	return wire.toDomain(limit)
+	return readWireDomain(ctx, c, false, "feed", "/feed/foryou/", inv.Expression, func(wire wireFeedResults) (FeedResults, error) {
+		return wire.toDomain(limit)
+	})
 }

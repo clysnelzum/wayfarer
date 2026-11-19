@@ -53,6 +53,9 @@ func writeResult(w http.ResponseWriter, logger *slog.Logger, value any, err erro
 	if status == 0 {
 		return
 	}
+	if status >= http.StatusInternalServerError && logger != nil {
+		logger.Warn("upstream request failed", "status", status, "code", code, "err", err)
+	}
 	if retryAfter != "" {
 		w.Header().Set("Retry-After", retryAfter)
 	}
@@ -65,7 +68,7 @@ func mapError(err error) (status int, code, message, retryAfter string) {
 		return http.StatusBadGateway, "upstream_search_changed", "LinkedIn did not retain the requested job search, page, or filters.", ""
 	case errors.Is(err, linkedin.ErrJobSourceUnavailable):
 		return http.StatusNotFound, "recommendation_source_unavailable", "LinkedIn did not show this recommendation source in the current session.", ""
-	case errors.Is(err, linkedin.ErrJobNotFound), errors.Is(err, linkedin.ErrNotFound):
+	case errors.Is(err, linkedin.ErrJobNotFound):
 		return http.StatusNotFound, "job_not_found", "LinkedIn reports that the job is unavailable.", ""
 	case errors.Is(err, linkedin.ErrProfileNotFound):
 		return http.StatusNotFound, "profile_not_found", "LinkedIn reports that the personal profile is unavailable.", ""

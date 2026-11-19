@@ -88,28 +88,26 @@ func readTypeahead[Item any, Out any](
 	build func(status string, items []Item) Out,
 ) (Out, error) {
 	var zero Out
-	wire, err := readWire[wireTypeahead[Item]](ctx, c, false, op, jobTypeaheadPath, inv.Expression)
-	if err != nil {
-		return zero, err
-	}
-	if wire.Items == nil || len(*wire.Items) > maxTypeaheadSuggestions {
-		return zero, contractError(op, "missing or oversized typeahead items", nil)
-	}
-	items := *wire.Items
-	if (len(items) == 0 && wire.Status != "no_suggestions_observed") ||
-		(len(items) > 0 && wire.Status != "suggestions") {
-		return zero, contractError(op, "inconsistent typeahead status", nil)
-	}
-	seen := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		id, name := fields(item)
-		if !idPattern.MatchString(id) || strings.TrimSpace(name) == "" {
-			return zero, contractError(op, "invalid typeahead item", nil)
+	return readWireDomain(ctx, c, false, op, jobTypeaheadPath, inv.Expression, func(wire wireTypeahead[Item]) (Out, error) {
+		if wire.Items == nil || len(*wire.Items) > maxTypeaheadSuggestions {
+			return zero, contractError(op, "missing or oversized typeahead items", nil)
 		}
-		if _, duplicate := seen[id]; duplicate {
-			return zero, contractError(op, "duplicate typeahead item id", nil)
+		items := *wire.Items
+		if (len(items) == 0 && wire.Status != "no_suggestions_observed") ||
+			(len(items) > 0 && wire.Status != "suggestions") {
+			return zero, contractError(op, "inconsistent typeahead status", nil)
 		}
-		seen[id] = struct{}{}
-	}
-	return build(wire.Status, items), nil
+		seen := make(map[string]struct{}, len(items))
+		for _, item := range items {
+			id, name := fields(item)
+			if !idPattern.MatchString(id) || strings.TrimSpace(name) == "" {
+				return zero, contractError(op, "invalid typeahead item", nil)
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return zero, contractError(op, "duplicate typeahead item id", nil)
+			}
+			seen[id] = struct{}{}
+		}
+		return build(wire.Status, items), nil
+	})
 }

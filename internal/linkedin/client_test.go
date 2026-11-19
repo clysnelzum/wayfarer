@@ -1,6 +1,7 @@
 package linkedin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -174,6 +175,7 @@ func TestTransportErrorTranslation(t *testing.T) {
 		{"wrapped auth", fmt.Errorf("redirected: %w", chrome.ErrAuth), ErrAuthRequired},
 		{"busy", chrome.ErrBusy, ErrUpstreamBusy},
 		{"debugger unavailable", chrome.ErrDebuggerUnavailable, ErrDebuggerUnavailable},
+		{"debugger unavailable wrapping deadline exceeded", fmt.Errorf("%w: %w", chrome.ErrDebuggerUnavailable, context.DeadlineExceeded), ErrDebuggerUnavailable},
 		{"closed", chrome.ErrClosed, ErrDebuggerUnavailable},
 		{"deadline exceeded", context.DeadlineExceeded, context.DeadlineExceeded},
 		{"canceled", context.Canceled, context.Canceled},
@@ -212,11 +214,17 @@ func TestContractErrorUnwrapAndWirePayloadErrors(t *testing.T) {
 	}
 
 	for _, raw := range []string{``, `null`, `{invalid json`, `[]`} {
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logs, nil))
 		c := mustNewClient(t, readerFunc(func(context.Context, string, string) (json.RawMessage, error) {
 			return json.RawMessage(raw), nil
-		}))
+		}), WithLogger(logger))
 		_, err := c.Feed(context.Background(), 0)
 		assertContractError(t, err)
+		logged := logs.String()
+		if !strings.Contains(logged, `"msg":"linkedin wire contract error"`) || !strings.Contains(logged, `"op":"feed"`) {
+			t.Fatalf("expected wire contract error log, got: %s", logged)
+		}
 	}
 }
 

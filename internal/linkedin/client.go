@@ -123,6 +123,16 @@ func (c *Client) readRaw(ctx context.Context, rendered bool, path, expr string) 
 	return body, nil
 }
 
+func (c *Client) logContractError(op string, err error) {
+	if c == nil || c.logger == nil || err == nil {
+		return
+	}
+	var ce *ContractError
+	if errors.As(err, &ce) {
+		c.logger.Warn("linkedin wire contract error", "op", op, "err", err)
+	}
+}
+
 func readWire[T any](ctx context.Context, c *Client, rendered bool, op, path, expr string) (T, error) {
 	var zero T
 	body, err := c.readRaw(ctx, rendered, path, expr)
@@ -131,19 +141,68 @@ func readWire[T any](ctx context.Context, c *Client, rendered bool, op, path, ex
 	}
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return zero, contractError(op, "empty or null browser payload", nil)
+		cerr := contractError(op, "empty or null browser payload", nil)
+		c.logContractError(op, cerr)
+		return zero, cerr
 	}
 	var wire T
 	if err := json.Unmarshal(trimmed, &wire); err != nil {
-		return zero, contractError(op, "decode browser JSON", err)
+		cerr := contractError(op, "decode browser JSON", err)
+		c.logContractError(op, cerr)
+		return zero, cerr
 	}
 	return wire, nil
 }
 
-func validHTTPURL(raw string) bool {
+func readWireDomain[Wire any, Domain any](
+	ctx context.Context,
+	c *Client,
+	rendered bool,
+	op, path, expr string,
+	convert func(Wire) (Domain, error),
+) (Domain, error) {
+	var zero Domain
+	wire, err := readWire[Wire](ctx, c, rendered, op, path, expr)
+	if err != nil {
+		return zero, err
+	}
+	out, err := convert(wire)
+	if err != nil {
+		c.logContractError(op, err)
+		return zero, err
+	}
+	return out, nil
+}
+
+func parseHTTPURL(raw string) (*url.URL, bool) {
 	u, err := url.ParseRequestURI(raw)
 	if err != nil {
-		return false
+		return nil, false
 	}
-	return (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.User == nil
+	if (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil {
+		return nil, false
+	}
+	return u, true
+}
+
+func validHTTPURL(raw string) bool {
+	_, ok := parseHTTPURL(raw)
+	return ok
+}
+
+func optionalHTTPURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	u, ok := parseHTTPURL(trimmed)
+	if !ok {
+		return ""
+	}
+	if u.RawQuery != "" {
+		if _, err := url.QueryUnescape(u.RawQuery); err != nil {
+			return ""
+		}
+	}
+	return trimmed
 }

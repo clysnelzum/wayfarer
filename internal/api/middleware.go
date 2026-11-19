@@ -25,6 +25,9 @@ func withRecover(logger *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
+					if rec == http.ErrAbortHandler {
+						panic(rec)
+					}
 					if logger != nil {
 						logger.Error("http handler panic",
 							"method", r.Method,

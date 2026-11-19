@@ -76,9 +76,6 @@ func translateTransportError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return err
-	}
 	switch {
 	case errors.Is(err, chrome.ErrAuthRequired), errors.Is(err, chrome.ErrAuth):
 		return fmt.Errorf("%w: %w", ErrAuthRequired, err)
@@ -86,6 +83,8 @@ func translateTransportError(err error) error {
 		return fmt.Errorf("%w: %w", ErrUpstreamBusy, err)
 	case errors.Is(err, chrome.ErrDebuggerUnavailable), errors.Is(err, chrome.ErrClosed):
 		return fmt.Errorf("%w: %w", ErrDebuggerUnavailable, err)
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return err
 	default:
 		return err
 	}

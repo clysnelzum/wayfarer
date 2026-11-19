@@ -179,7 +179,7 @@ func (w wireProfileResponse) toDomain(requestedSlug, baseURL string) (Profile, e
 	if p.FollowersCount != nil && *p.FollowersCount < 0 {
 		return Profile{}, contractError(op, "negative followers_count", nil)
 	}
-	for _, rawURL := range []string{p.ProfileImageURL, p.BackgroundImageURL, p.Website} {
+	for _, rawURL := range []string{p.ProfileImageURL, p.BackgroundImageURL} {
 		if rawURL != "" && !validHTTPURL(rawURL) {
 			return Profile{}, contractError(op, "invalid profile url field", nil)
 		}
@@ -260,7 +260,7 @@ func (w wireProfileResponse) toDomain(requestedSlug, baseURL string) (Profile, e
 		ConnectionsLabel:    p.ConnectionsLabel,
 		CurrentCompanyLabel: p.CurrentCompanyLabel,
 		EducationLabel:      p.EducationLabel,
-		Website:             p.Website,
+		Website:             optionalHTTPURL(p.Website),
 		OpenToWork:          p.OpenToWork,
 		Hiring:              p.Hiring,
 		About:               p.About,
@@ -307,13 +307,11 @@ func convertProfileFeatured(op string, raw []wireProfileFeaturedItem) ([]Profile
 	}
 	out := make([]ProfileFeaturedItem, len(raw))
 	for i, item := range raw {
-		if strings.TrimSpace(item.Title) == "" && strings.TrimSpace(item.URL) == "" {
+		itemURL := optionalHTTPURL(item.URL)
+		if strings.TrimSpace(item.Title) == "" && itemURL == "" {
 			return nil, contractError(op, "empty featured item", nil)
 		}
-		if item.URL != "" && !validHTTPURL(item.URL) {
-			return nil, contractError(op, "invalid featured item url", nil)
-		}
-		out[i] = ProfileFeaturedItem{Title: item.Title, Type: item.Type, URL: item.URL}
+		out[i] = ProfileFeaturedItem{Title: item.Title, Type: item.Type, URL: itemURL}
 	}
 	return out, nil
 }
@@ -414,15 +412,12 @@ func convertProfileCertifications(op string, raw []wireProfileCertification) ([]
 		if strings.TrimSpace(cert.Name) == "" {
 			return nil, contractError(op, "missing certification name", nil)
 		}
-		if cert.CredentialURL != "" && !validHTTPURL(cert.CredentialURL) {
-			return nil, contractError(op, "invalid certification credential_url", nil)
-		}
 		out[i] = ProfileCertification{
 			Name:          cert.Name,
 			Issuer:        cert.Issuer,
 			IssueDate:     cert.IssueDate,
 			CredentialID:  cert.CredentialID,
-			CredentialURL: cert.CredentialURL,
+			CredentialURL: optionalHTTPURL(cert.CredentialURL),
 		}
 	}
 	return out, nil
@@ -474,14 +469,11 @@ func convertProfileProjects(op string, raw []wireProfileProject) ([]ProfileProje
 		if strings.TrimSpace(proj.Title) == "" {
 			return nil, contractError(op, "missing project title", nil)
 		}
-		if proj.URL != "" && !validHTTPURL(proj.URL) {
-			return nil, contractError(op, "invalid project url", nil)
-		}
 		out[i] = ProfileProject{
 			Title:       proj.Title,
 			DateRange:   proj.DateRange,
 			Description: proj.Description,
-			URL:         proj.URL,
+			URL:         optionalHTTPURL(proj.URL),
 		}
 	}
 	return out, nil
@@ -522,15 +514,12 @@ func convertProfilePublications(op string, raw []wireProfilePublication) ([]Prof
 		if strings.TrimSpace(pub.Title) == "" {
 			return nil, contractError(op, "missing publication title", nil)
 		}
-		if pub.URL != "" && !validHTTPURL(pub.URL) {
-			return nil, contractError(op, "invalid publication url", nil)
-		}
 		out[i] = ProfilePublication{
 			Title:       pub.Title,
 			Publisher:   pub.Publisher,
 			Date:        pub.Date,
 			Description: pub.Description,
-			URL:         pub.URL,
+			URL:         optionalHTTPURL(pub.URL),
 		}
 	}
 	return out, nil

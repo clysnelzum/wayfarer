@@ -100,7 +100,7 @@ func (w wireCompanyResponse) toDomain(requestedSlug, baseURL string) (Company, e
 	if co.LocationsCount != nil && *co.LocationsCount < 0 {
 		return Company{}, contractError(op, "negative locations_count", nil)
 	}
-	for _, rawURL := range []string{co.Website, co.LogoURL, co.CoverImageURL} {
+	for _, rawURL := range []string{co.LogoURL, co.CoverImageURL} {
 		if rawURL != "" && !validHTTPURL(rawURL) {
 			return Company{}, contractError(op, "invalid company url field", nil)
 		}
@@ -152,14 +152,11 @@ func (w wireCompanyResponse) toDomain(requestedSlug, baseURL string) (Company, e
 			if strings.TrimSpace(loc.Address) == "" && strings.TrimSpace(loc.Label) == "" {
 				return Company{}, contractError(op, "empty company location", nil)
 			}
-			if loc.MapURL != "" && !validHTTPURL(loc.MapURL) {
-				return Company{}, contractError(op, "invalid company location map_url", nil)
-			}
 			locations[i] = CompanyLocation{
 				Label:          loc.Label,
 				Address:        loc.Address,
 				IsHeadquarters: loc.IsHeadquarters,
-				MapURL:         loc.MapURL,
+				MapURL:         optionalHTTPURL(loc.MapURL),
 			}
 		}
 	}
@@ -180,7 +177,7 @@ func (w wireCompanyResponse) toDomain(requestedSlug, baseURL string) (Company, e
 		ID:                     co.ID,
 		Tagline:                co.Tagline,
 		Description:            co.Description,
-		Website:                co.Website,
+		Website:                optionalHTTPURL(co.Website),
 		Phone:                  co.Phone,
 		Industry:               co.Industry,
 		CompanySize:            co.CompanySize,

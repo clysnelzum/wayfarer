@@ -45,7 +45,9 @@ func (c *Client) resolveJobSource(ctx context.Context, source string) (jobSource
 		return jobSourceContext{}, ErrJobSourceUnavailable
 	}
 	if !wire.jobSourceContext.validFor(source) {
-		return jobSourceContext{}, contractError("resolve_job_source", "invalid recommendation source context", nil)
+		err := contractError("resolve_job_source", "invalid recommendation source context", nil)
+		c.logContractError("resolve_job_source", err)
+		return jobSourceContext{}, err
 	}
 	return wire.jobSourceContext, nil
 }

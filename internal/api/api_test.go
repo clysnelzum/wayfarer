@@ -303,3 +303,53 @@ func TestWriteJSONMarshalFailure(t *testing.T) {
 		t.Fatalf("unexpected marshal error body: %s", w.Body)
 	}
 }
+
+func TestRecoverRepanicsErrAbortHandler(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	h, err := NewHandler("local", &stub{panicVal: http.ErrAbortHandler}, WithLogger(logger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/feed", nil)
+	req.Header.Set("Authorization", "Bearer local")
+	w := httptest.NewRecorder()
+
+	defer func() {
+		rec := recover()
+		if rec != http.ErrAbortHandler {
+			t.Fatalf("expected http.ErrAbortHandler to be re-panicked, got %v", rec)
+		}
+		if logs.Len() != 0 {
+			t.Fatalf("expected no error log for http.ErrAbortHandler, got: %s", logs.String())
+		}
+	}()
+	h.ServeHTTP(w, req)
+}
+
+func TestWriteResultLogsUpstreamFailuresWithoutAuthLeak(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	h, err := NewHandler("super-secret-token-value", &stub{err: linkedin.ErrDebuggerUnavailable}, WithLogger(logger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/feed", nil)
+	req.Header.Set("Authorization", "Bearer super-secret-token-value")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body)
+	}
+	logged := logs.String()
+	if strings.Contains(logged, "super-secret-token-value") || strings.Contains(logged, "Authorization") {
+		t.Fatalf("logs leaked auth header or token: %s", logged)
+	}
+	if !strings.Contains(logged, `"msg":"upstream request failed"`) ||
+		!strings.Contains(logged, `"status":503`) ||
+		!strings.Contains(logged, `"code":"upstream_debugger_unavailable"`) ||
+		!strings.Contains(logged, linkedin.ErrDebuggerUnavailable.Error()) {
+		t.Fatalf("expected upstream request failed log with status, code, and err, got: %s", logged)
+	}
+}
